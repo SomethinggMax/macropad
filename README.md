@@ -7,6 +7,8 @@ The Pi plugs into a PC over USB-C and enumerates as genuine HID hardware — not
 synthetic input. It works on a login screen, in a BIOS, in a remote desktop
 session, and on machines where you cannot install anything.
 
+https://github.com/user-attachments/assets/551d35db-5beb-4bbc-bf0e-de8524998c4b
+
 ![status](https://img.shields.io/badge/platform-Raspberry%20Pi%204-c51a4a)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
