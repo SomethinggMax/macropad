@@ -202,7 +202,7 @@ key enter"></textarea>
         <tr><td><code>waitfor window &lt;t&gt; [ms]</code></td><td>Block until that window is focused — better than guessing a delay</td></tr>
         <tr><td><code>waitfor pixel &lt;x&gt; &lt;y&gt; &lt;#rrggbb&gt; [ms]</code></td><td>Block until a pixel turns that colour</td></tr>
         <tr><td><code>getpixel &lt;x&gt; &lt;y&gt; &lt;var&gt;</code></td><td>Read a pixel colour into a variable</td></tr>
-        <tr><td><code>jumpif &lt;var&gt; &lt;op&gt; &lt;val&gt; &lt;label&gt;</code></td><td>Branch: <code>jumpif i &lt; 5 loop</code>. Ops: <code>&lt; &lt;= &gt; &gt;= == != contains</code></td></tr>
+        <tr><td><code>jumpif &lt;var&gt; &lt;op&gt; &lt;val&gt; &lt;label&gt;</code></td><td>Branch: <code>jumpif i &lt; 5 loop</code>. Ops: <code>&lt; &lt;= &gt; &gt;= == != contains near</code>. <code>near</code> matches colours within 16 per channel</td></tr>
         <tr><td><code>moveto &lt;x&gt; &lt;y&gt;</code></td><td>Move the mouse to an absolute pixel position</td></tr>
         <tr><td><code>move &lt;dx&gt; &lt;dy&gt;</code></td><td>Move relative to the last position</td></tr>
         <tr><td><code>click [button] [n]</code></td><td><code>click</code>, <code>click right</code>, <code>click left 2</code></td></tr>
@@ -223,7 +223,7 @@ key enter"></textarea>
         <tr><td><code>goto &lt;name&gt;</code></td><td>Jump to a label</td></tr>
         <tr><td><code>chance &lt;pct&gt; &lt;cmd&gt;</code></td><td>Run cmd n% of the time</td></tr>
         <tr><td><code>oneof a|b|c</code></td><td>Type one option at random</td></tr>
-        <tr><td><code># comment</code></td><td>Ignored</td></tr>
+        <tr><td><code># comment</code></td><td>Whole line, or trailing on any command except <code>type</code>/<code>paste</code>/<code>set</code>/<code>oneof</code></td></tr>
       </table>
     </details>
   </div>

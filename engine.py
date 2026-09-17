@@ -34,7 +34,20 @@ class Instruction:
 
 
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-COMPARISONS = ("<", "<=", ">", ">=", "==", "!=", "contains")
+COMPARISONS = ("<", "<=", ">", ">=", "==", "!=", "contains", "near")
+COLOUR = re.compile(r"^#?([0-9a-fA-F]{6})$")
+NEAR_TOLERANCE = 16  # per channel, for the "near" comparison
+# Commands whose argument is literal text, where '#' must stay as typed.
+TEXT_OPS = ("type", "paste", "set", "oneof")
+COLOUR_TOKEN = re.compile(r"^#[0-9a-fA-F]{6}(?![0-9a-fA-F])")
+
+
+def strip_inline_comment(text):
+    """Drop a trailing '# ...' comment, but keep colour literals like #ff00aa."""
+    for index, char in enumerate(text):
+        if char == "#" and not COLOUR_TOKEN.match(text[index:]):
+            return text[:index]
+    return text
 MOUSE_OPS = ("move", "moveto", "click", "mousedown", "mouseup",
              "scroll", "screen")
 # ops whose x/y are measured from the anchored window, when one is set
@@ -100,6 +113,8 @@ def parse(source):
             continue
         op, _, remainder = body.partition(" ")
         op = op.lower()
+        if op not in TEXT_OPS:
+            remainder = strip_inline_comment(remainder)
         rest = remainder.strip()
 
         if op == "type":
@@ -399,9 +414,29 @@ def _anchored(x, y, anchor):
     return x + left, y + top
 
 
+def _channels(value):
+    """#rrggbb -> (r, g, b), or None when it is not a colour."""
+    found = COLOUR.match(str(value).strip())
+    if not found:
+        return None
+    digits = found.group(1)
+    return tuple(int(digits[i:i + 2], 16) for i in (0, 2, 4))
+
+
 def _compare(left, right, comparison, line):
     if comparison == "contains":
         return str(right).lower() in str(left).lower()
+
+    first_rgb, second_rgb = _channels(left), _channels(right)
+    if comparison == "near":
+        if first_rgb is None or second_rgb is None:
+            raise MacroError(
+                f"line {line}: 'near' compares colours, got {left!r} and {right!r}")
+        return all(abs(a - b) <= NEAR_TOLERANCE
+                   for a, b in zip(first_rgb, second_rgb))
+    if first_rgb is not None and second_rgb is not None:
+        # colours are case-insensitive: getpixel returns lowercase hex
+        left, right = str(left).strip().lower(), str(right).strip().lower()
     try:
         first, second = int(str(left).strip()), int(str(right).strip())
     except ValueError:
