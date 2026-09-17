@@ -160,6 +160,18 @@ def parse(source):
             if len(parts) > 2:
                 raise MacroError(f"line {lineno}: 'click' takes <button> <count>")
             instrs.append(Instruction("click", [button, count], lineno))
+        elif op == "limit":
+            if rest.lower() in ("none", "off", "unlimited"):
+                instrs.append(Instruction("limit", [None], lineno))
+            else:
+                try:
+                    seconds = int(rest)
+                except ValueError:
+                    raise MacroError(
+                        f"line {lineno}: 'limit' takes seconds, or 'none'") from None
+                if seconds < 1:
+                    raise MacroError(f"line {lineno}: 'limit' must be at least 1s")
+                instrs.append(Instruction("limit", [seconds], lineno))
         elif op == "anchor":
             if not rest:
                 raise MacroError(
@@ -195,11 +207,19 @@ def parse(source):
                 instrs.append(Instruction(
                     "waitfor", ["window", " ".join(rest_parts), timeout], lineno))
             elif kind == "pixel":
+                tolerant = len(rest_parts) == 4 and rest_parts[2].lower() == "near"
+                if tolerant:
+                    rest_parts = [rest_parts[0], rest_parts[1], rest_parts[3]]
                 if len(rest_parts) != 3:
                     raise MacroError(
-                        f"line {lineno}: 'waitfor pixel' needs <x> <y> <#rrggbb>")
+                        f"line {lineno}: 'waitfor pixel' needs "
+                        f"<x> <y> [near] <#rrggbb>")
+                if "$" not in rest_parts[2] and not COLOUR.match(rest_parts[2]):
+                    raise MacroError(
+                        f"line {lineno}: {rest_parts[2]!r} is not a colour "
+                        f"like #feef00")
                 instrs.append(Instruction(
-                    "waitfor", ["pixel", rest_parts, timeout], lineno))
+                    "waitfor", ["pixel", rest_parts, timeout, tolerant], lineno))
             else:
                 raise MacroError(
                     f"line {lineno}: waitfor {kind!r} - use 'window' or 'pixel'")
@@ -350,6 +370,11 @@ def run(source, kb=None, max_steps=100_000, max_seconds=60.0, dry_run=False,
     """Execute a macro. Guard rails stop runaway loops from spamming the host."""
     instrs, labels = parse(source)
 
+    # A macro that declares itself unbounded is not a runaway, so a check
+    # should truncate its trace rather than fail it - otherwise such a macro
+    # could not even be saved.
+    declared_unbounded = any(i.op == "limit" and i.args[0] is None for i in instrs)
+
     layout_name = kb.layout_name if kb is not None else (layout or layouts.DEFAULT)
     table = layouts.get(layout_name)
     validate(instrs, table, layout_name)
@@ -370,16 +395,26 @@ def run(source, kb=None, max_steps=100_000, max_seconds=60.0, dry_run=False,
 
     counters, variables, steps = {}, {}, 0
     anchor = {"origin": None, "name": None}
+    limits = {"steps": max_steps, "seconds": max_seconds}
     started = time.monotonic()
     log = []
     try:
         pc = 0
         while pc < len(instrs):
             steps += 1
-            if steps > max_steps:
-                raise MacroError(f"aborted: exceeded {max_steps} steps (runaway loop?)")
-            if time.monotonic() - started > max_seconds:
-                raise MacroError(f"aborted: exceeded {max_seconds}s runtime")
+            if limits["steps"] is not None and steps > limits["steps"]:
+                if dry_run and declared_unbounded:
+                    log.append(f"... trace stopped at {limits['steps']} steps: this "
+                               f"macro declares 'limit none' and runs until stopped")
+                    break
+                raise MacroError(
+                    f"aborted: exceeded {limits['steps']} steps (runaway loop?) - "
+                    f"add 'limit none' if the macro is meant to run until stopped")
+            if (limits["seconds"] is not None
+                    and time.monotonic() - started > limits["seconds"]):
+                raise MacroError(
+                    f"aborted: exceeded {limits['seconds']}s runtime - "
+                    f"add 'limit none' if the macro is meant to run until stopped")
 
             if stop is not None and stop.is_set():
                 raise MacroStopped("stopped", log)
@@ -388,7 +423,7 @@ def run(source, kb=None, max_steps=100_000, max_seconds=60.0, dry_run=False,
             if on_step is not None:
                 on_step(instr.line, instr.op)
             pc = _step(instr, pc, kb, labels, counters, log, dry_run, stop,
-                       variables, table, mouse, anchor)
+                       variables, table, mouse, anchor, limits)
     except MacroStopped as exc:
         exc.log = log
         raise
@@ -468,9 +503,11 @@ def _check_combo(combo, line):
 
 
 def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
-          variables=None, table=None, mouse=None, anchor=None):
+          variables=None, table=None, mouse=None, anchor=None,
+          limits=None):
     variables = {} if variables is None else variables
     anchor = {"origin": None, "name": None} if anchor is None else anchor
+    limits = {"steps": None, "seconds": None} if limits is None else limits
     op, args = instr.op, instr.args
 
     if op == "nop":
@@ -526,6 +563,23 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
         log.append(f"jumpif {variable}={left!r} {comparison} {right!r} -> "
                    f"{'jump to ' + target if hit else 'continue'}")
         return labels[target] if hit else pc + 1
+    if op == "limit":
+        # The guard exists to catch accidental runaways; a macro that says it
+        # runs until stopped is not an accident. STOP still works either way.
+        #
+        # A dry run must stay bounded whatever the macro asks for: it has no
+        # STOP to rescue it, so honouring 'limit none' here would spin a
+        # request thread forever.
+        seconds = args[0]
+        if dry_run:
+            log.append("limit " + ("none" if seconds is None else f"{seconds}s")
+                       + " (ignored while checking, so the check terminates)")
+            return pc + 1
+        limits["seconds"] = seconds
+        limits["steps"] = None if seconds is None else limits["steps"]
+        log.append("limit removed - runs until stopped"
+                   if seconds is None else f"limit {seconds}s")
+        return pc + 1
     if op == "anchor":
         target = expand(args[0], variables, instr.line)
         if target.lower() in ("none", "off", "screen"):
@@ -578,7 +632,8 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
         log.append(f"getpixel {x},{y} -> {args[2]} = {variables[args[2]]}")
         return pc + 1
     if op == "waitfor":
-        kind, spec, timeout_raw = args
+        kind, spec, timeout_raw = args[0], args[1], args[2]
+        tolerant = args[3] if len(args) > 3 else False
         limit = as_number(timeout_raw, variables, instr.line, "timeout") / 1000
         if kind == "window":
             wanted = expand(spec, variables, instr.line).lower()
@@ -587,7 +642,7 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
             x, y = _anchored(as_number(spec[0], variables, instr.line, "x"),
                              as_number(spec[1], variables, instr.line, "y"), anchor)
             wanted = expand(spec[2], variables, instr.line).lower()
-            describe = f"pixel {x},{y} == {wanted}"
+            describe = (f"pixel {x},{y} {'near' if tolerant else '=='} {wanted}")
         if dry_run:
             log.append(f"waitfor {describe} (up to {limit:g}s)")
             return pc + 1
@@ -599,7 +654,9 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
                     hit = wanted in (current.get("title", "") + " "
                                      + current.get("exe", "")).lower()
                 else:
-                    hit = (agent_client.pixel(x, y) or "").lower() == wanted
+                    found_colour = (agent_client.pixel(x, y) or "").lower()
+                    hit = (_compare(found_colour, wanted, "near", instr.line)
+                           if tolerant else found_colour == wanted)
             except agent_client.AgentError as exc:
                 raise MacroError(f"line {instr.line}: {exc}") from None
             if hit:
@@ -707,7 +764,7 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
             pct = as_number(pct, variables, instr.line, "chance percent")
         if random.randint(1, 100) <= pct:
             return _step(inner, pc, kb, labels, counters, log, dry_run, stop,
-                         variables, table, mouse, anchor)
+                         variables, table, mouse, anchor, limits)
         log.append(f"chance {pct}% skipped")
         return pc + 1
     if op == "oneof":

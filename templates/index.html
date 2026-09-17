@@ -200,7 +200,7 @@ key enter"></textarea>
         <tr><td><code>paste &lt;text&gt;</code></td><td>Clipboard + Ctrl+V. Instant, and types anything — emoji, —, accents (needs agent)</td></tr>
         <tr><td><code>clip &lt;var&gt;</code></td><td>Read the PC clipboard into a variable (needs agent)</td></tr>
         <tr><td><code>waitfor window &lt;t&gt; [ms]</code></td><td>Block until that window is focused — better than guessing a delay</td></tr>
-        <tr><td><code>waitfor pixel &lt;x&gt; &lt;y&gt; &lt;#rrggbb&gt; [ms]</code></td><td>Block until a pixel turns that colour</td></tr>
+        <tr><td><code>waitfor pixel &lt;x&gt; &lt;y&gt; [near] &lt;#rrggbb&gt; [ms]</code></td><td>Block until a pixel turns that colour. <b>Use <code>near</code></b> — exact rarely matches on real screens</td></tr>
         <tr><td><code>getpixel &lt;x&gt; &lt;y&gt; &lt;var&gt;</code></td><td>Read a pixel colour into a variable</td></tr>
         <tr><td><code>jumpif &lt;var&gt; &lt;op&gt; &lt;val&gt; &lt;label&gt;</code></td><td>Branch: <code>jumpif i &lt; 5 loop</code>. Ops: <code>&lt; &lt;= &gt; &gt;= == != contains near</code>. <code>near</code> matches colours within 16 per channel</td></tr>
         <tr><td><code>moveto &lt;x&gt; &lt;y&gt;</code></td><td>Move the mouse to an absolute pixel position</td></tr>
@@ -209,6 +209,8 @@ key enter"></textarea>
         <tr><td><code>mousedown/mouseup</code></td><td>Hold a button (drag): <code>mousedown left</code> … <code>mouseup</code></td></tr>
         <tr><td><code>scroll &lt;n&gt;</code></td><td>Wheel; positive up, negative down</td></tr>
         <tr><td><code>screen &lt;w&gt; &lt;h&gt;</code></td><td>Tell the Pi your resolution (default 1920x1080)</td></tr>
+        <tr><td><code>limit none</code></td><td>Run until STOP is pressed. Without it a macro is capped at 300s</td></tr>
+        <tr><td><code>limit &lt;seconds&gt;</code></td><td>Set your own runtime cap</td></tr>
         <tr><td><code>anchor &lt;window&gt;</code></td><td>Make following x/y relative to that window's client area; <code>anchor none</code> to reset</td></tr>
         <tr><td><code>focus &lt;window&gt;</code></td><td>Switch to a window by title or exe (needs the PC agent): <code>focus Notepad</code></td></tr>
         <tr><td><code>set &lt;name&gt; &lt;value&gt;</code></td><td>Define a variable: <code>set n 3</code>, <code>set who Max</code></td></tr>
@@ -299,7 +301,7 @@ async function check() {
 const COMMANDS = ['type','key','hold','release','delay','label','goto',
                   'repeat','end','chance','oneof','set','add','focus',
                   'jumpif','moveto','move','click','mousedown','mouseup',
-                  'scroll','screen','paste','clip','getpixel','waitfor','anchor'];
+                  'scroll','screen','paste','clip','getpixel','waitfor','anchor','limit'];
 const NOARG = ['end','release'];
 
 function vars(escaped) {
@@ -363,6 +365,9 @@ function hlLine(raw) {
       : (/^[ \t]+$/.test(x) ? x
          : (/^#[0-9a-fA-F]{6}$/.test(x) ? `<span class="c-key">${esc(x)}</span>`
             : (/^\d+$/.test(x) ? num(x) : `<span class="c-win">${esc(x)}</span>`)))).join('');
+  } else if (lc === 'limit') {
+    body2 = /^(none|off|unlimited)$/i.test(rest)
+      ? `<span class="c-kw">${esc(rest)}</span>` : num(rest);
   } else if (lc === 'anchor') {
     body2 = /^(none|off|screen)$/i.test(rest)
       ? `<span class="c-kw">${esc(rest)}</span>`

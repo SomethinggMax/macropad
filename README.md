@@ -89,6 +89,7 @@ end
 label top                     # labels and jumps
 jumpif n < 5 top              # < <= > >= == != contains
 
+limit none                    # run until STOP; default cap is 300s
 chance 30 type maybe          # runs 30% of the time
 oneof alpha|beta|gamma        # picks one at random
 
@@ -106,7 +107,7 @@ waitfor window Chrome 5000
 paste anything — even 🎉 or 中文
 clip var                      # read the PC clipboard
 getpixel 800 400 col
-waitfor pixel 800 400 #ff0000 10000
+waitfor pixel 800 400 near #ff0000 10000   # 'near' tolerates a shade or two
 ```
 
 Runaway loops are capped by step and time limits, and every macro releases all
