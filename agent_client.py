@@ -7,6 +7,7 @@ the browser connects from, which is the same machine the agent runs on.
 import fcntl
 import json
 from pathlib import Path
+from urllib.parse import quote
 import re
 import socket
 import struct
@@ -16,6 +17,7 @@ import urllib.request
 
 PORT = 8765
 TIMEOUT = 4.0
+WANT_VERSION = 3
 # Remembered across restarts: the host is normally learned from the browser, so
 # without this every service restart would break agent features until someone
 # reloaded the IDE.
@@ -161,6 +163,30 @@ def set_clipboard(text):
     if not result.get("ok"):
         raise AgentError("the PC refused to set the clipboard")
     return True
+
+
+def version():
+    """Agent protocol version, or 0 when it is too old to report one."""
+    try:
+        return int(ping().get("version") or 0)
+    except (AgentError, TypeError, ValueError):
+        return 0
+
+
+def window(target):
+    """Resolve a window by title or exe, with its screen and client rectangles."""
+    result = _call(f"/window?target={quote(str(target))}", timeout=3.0)
+    if not result.get("ok") or not result.get("window"):
+        raise AgentError(result.get("error") or f"no window matching {target!r}")
+    return result["window"]
+
+
+def region(x, y, w=32, h=32):
+    """A block of screen pixels as base64 RGB, centred on demand by the caller."""
+    result = _call(f"/region?x={int(x)}&y={int(y)}&w={int(w)}&h={int(h)}", timeout=4.0)
+    if not result.get("ok"):
+        raise AgentError(result.get("error") or "agent has no /region - re-download it")
+    return result
 
 
 def pixel(x, y):

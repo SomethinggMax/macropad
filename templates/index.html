@@ -86,6 +86,13 @@
   .readout { font-family: ui-monospace, Menlo, monospace; font-size: 13px;
              min-width: 190px; color: var(--ink); }
   .readout small { color: var(--dim); display: block; font-size: 11px; }
+  .zoomwrap { margin-top: 10px; display: none; gap: 12px; align-items: flex-start; }
+  .zoomwrap.on { display: flex; }
+  #zoom { border: 1px solid var(--edge); border-radius: 6px; cursor: crosshair;
+          image-rendering: pixelated; background: #000; }
+  .zoominfo { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px;
+              color: var(--dim); line-height: 1.7; }
+  .zoominfo b { color: var(--ink); font-weight: 600; }
   .cath { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
           color: var(--dim); margin-top: 10px; }
   .c-set { color: #38bdf8; font-style: italic; }
@@ -164,9 +171,14 @@ key enter"></textarea>
       <div id="readout" class="readout">—<small>move your mouse on the PC</small></div>
       <button id="livebtn" class="act" onclick="toggleLive()">▶ Live</button>
       <button class="act" onclick="captureSoon()">◉ Capture in 3s</button>
+      <button class="act" onclick="zoomSoon()">⊞ Zoom grid</button>
       <button class="act" onclick="insertProbe('getpixel')">+ getpixel</button>
       <button class="act" onclick="insertProbe('waitfor')">+ waitfor pixel</button>
       <button class="act" onclick="insertProbe('moveto')">+ moveto</button>
+    </div>
+    <div id="zoomwrap" class="zoomwrap">
+      <canvas id="zoom" width="448" height="448"></canvas>
+      <div id="zoominfo" class="zoominfo"></div>
     </div>
 
     <details>
@@ -191,6 +203,7 @@ key enter"></textarea>
         <tr><td><code>mousedown/mouseup</code></td><td>Hold a button (drag): <code>mousedown left</code> … <code>mouseup</code></td></tr>
         <tr><td><code>scroll &lt;n&gt;</code></td><td>Wheel; positive up, negative down</td></tr>
         <tr><td><code>screen &lt;w&gt; &lt;h&gt;</code></td><td>Tell the Pi your resolution (default 1920x1080)</td></tr>
+        <tr><td><code>anchor &lt;window&gt;</code></td><td>Make following x/y relative to that window's client area; <code>anchor none</code> to reset</td></tr>
         <tr><td><code>focus &lt;window&gt;</code></td><td>Switch to a window by title or exe (needs the PC agent): <code>focus Notepad</code></td></tr>
         <tr><td><code>set &lt;name&gt; &lt;value&gt;</code></td><td>Define a variable: <code>set n 3</code>, <code>set who Max</code></td></tr>
         <tr><td><code>add &lt;name&gt; &lt;n&gt;</code></td><td>Add to a number (negative to subtract); unset starts at 0</td></tr>
@@ -225,8 +238,13 @@ function say(msg, cls = '') { $('log').innerHTML = `<span class="${cls}">${msg}<
 async function poll() {
   try {
     const d = await api('/api/status');
-    $('status').textContent = d.connected ? 'PC connected' : `not connected (${d.state})`;
-    $('status').className = 'pill ' + (d.connected ? 'on' : 'off');
+    if (d.agent_stale) {
+      $('status').textContent = `agent v${d.agent_version} is old — re-download (needs v${d.agent_wants})`;
+      $('status').className = 'pill off';
+    } else {
+      $('status').textContent = d.connected ? 'PC connected' : `not connected (${d.state})`;
+      $('status').className = 'pill ' + (d.connected ? 'on' : 'off');
+    }
   } catch { $('status').textContent = 'pi unreachable'; $('status').className = 'pill off'; }
 }
 
@@ -275,7 +293,7 @@ async function check() {
 const COMMANDS = ['type','key','hold','release','delay','label','goto',
                   'repeat','end','chance','oneof','set','add','focus',
                   'jumpif','moveto','move','click','mousedown','mouseup',
-                  'scroll','screen','paste','clip','getpixel','waitfor'];
+                  'scroll','screen','paste','clip','getpixel','waitfor','anchor'];
 const NOARG = ['end','release'];
 
 function vars(escaped) {
@@ -339,6 +357,10 @@ function hlLine(raw) {
       : (/^[ \t]+$/.test(x) ? x
          : (/^#[0-9a-fA-F]{6}$/.test(x) ? `<span class="c-key">${esc(x)}</span>`
             : (/^\d+$/.test(x) ? num(x) : `<span class="c-win">${esc(x)}</span>`)))).join('');
+  } else if (lc === 'anchor') {
+    body2 = /^(none|off|screen)$/i.test(rest)
+      ? `<span class="c-kw">${esc(rest)}</span>`
+      : `<span class="c-win">${esc(rest)}</span>`;
   } else if (lc === 'focus') {
     body2 = `<span class="c-win">${esc(rest)}</span>`;
   } else if (lc === 'label' || lc === 'goto') {
@@ -428,7 +450,7 @@ function toggleLive() {
   if (liveTimer) return stopLive();
   $('livebtn').textContent = '⏸ Stop';
   sampleProbe('live');
-  liveTimer = setInterval(() => sampleProbe('live'), 250);
+  liveTimer = setInterval(() => sampleProbe('live — colour may include the cursor'), 250);
 }
 
 async function captureSoon() {
@@ -439,8 +461,78 @@ async function captureSoon() {
     $('readout').innerHTML = `—<small>point at the target… ${t}</small>`;
     await new Promise(r => setTimeout(r, 1000));
   }
-  const p = await sampleProbe('captured');
-  if (p) say(`captured ${p.x},${p.y} ${p.colour}`, 'ok');
+  // Accurate read: the server parks the pointer so the cursor graphic is not
+  // what gets sampled.
+  try {
+    const p = await api('/api/sample', { method: 'POST' });
+    showProbe(p, 'captured (pointer moved clear)');
+    say(`captured ${p.x},${p.y} ${p.colour}`, 'ok');
+  } catch (e) { say(e.message, 'err'); }
+}
+
+const ZOOM = 14;
+let grid = null;   // { left, top, size, px: Uint8Array }
+
+function gridColour(cx, cy) {
+  const i = (cy * grid.size + cx) * 3;
+  const hex = n => n.toString(16).padStart(2, '0');
+  return '#' + hex(grid.px[i]) + hex(grid.px[i + 1]) + hex(grid.px[i + 2]);
+}
+
+function drawGrid(hoverX, hoverY) {
+  const c = $('zoom'), g = c.getContext('2d');
+  const off = document.createElement('canvas');
+  off.width = off.height = grid.size;
+  const img = off.getContext('2d').createImageData(grid.size, grid.size);
+  for (let i = 0; i < grid.size * grid.size; i++) {
+    img.data[i * 4] = grid.px[i * 3];
+    img.data[i * 4 + 1] = grid.px[i * 3 + 1];
+    img.data[i * 4 + 2] = grid.px[i * 3 + 2];
+    img.data[i * 4 + 3] = 255;
+  }
+  off.getContext('2d').putImageData(img, 0, 0);
+  c.width = c.height = grid.size * ZOOM;
+  g.imageSmoothingEnabled = false;
+  g.drawImage(off, 0, 0, c.width, c.height);
+
+  // where the pointer itself sits, so you can avoid the cursor graphic
+  const mid = Math.floor(grid.size / 2) * ZOOM;
+  g.strokeStyle = 'rgba(255,80,80,.9)'; g.lineWidth = 1;
+  g.strokeRect(mid + 0.5, mid + 0.5, ZOOM - 1, ZOOM - 1);
+
+  if (hoverX !== undefined) {
+    g.strokeStyle = '#fff'; g.lineWidth = 2;
+    g.strokeRect(hoverX * ZOOM + 1, hoverY * ZOOM + 1, ZOOM - 2, ZOOM - 2);
+  }
+}
+
+async function zoomSoon() {
+  stopLive();
+  for (let t = 3; t > 0; t--) {
+    $('readout').innerHTML = `—<small>point at the target… ${t}</small>`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  try {
+    const d = await api('/api/region?size=32');
+    grid = { left: d.left, top: d.top, size: d.size,
+             px: Uint8Array.from(atob(d.rgb), ch => ch.charCodeAt(0)) };
+    $('zoomwrap').classList.add('on');
+    drawGrid();
+    $('zoominfo').innerHTML =
+      `<b>click a pixel to pick it</b><br>` +
+      `region ${d.left},${d.top} → ${d.left + d.size - 1},${d.top + d.size - 1}<br>` +
+      `<span style="color:#f55">red box</span> = where the pointer is<br>` +
+      `(pick a pixel beside it to avoid the<br>cursor graphic)`;
+    say('grid captured — click a pixel', 'ok');
+  } catch (e) { say(e.message, 'err'); }
+}
+
+function gridCell(ev) {
+  const r = $('zoom').getBoundingClientRect();
+  const cx = Math.floor((ev.clientX - r.left) / ZOOM);
+  const cy = Math.floor((ev.clientY - r.top) / ZOOM);
+  if (cx < 0 || cy < 0 || cx >= grid.size || cy >= grid.size) return null;
+  return { cx, cy };
 }
 
 function insertProbe(kind) {
@@ -614,6 +706,22 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { e.preventDefault(); stopNow(); }
 });
 
+$('zoom').addEventListener('mousemove', ev => {
+  if (!grid) return;
+  const cell = gridCell(ev); if (!cell) return;
+  drawGrid(cell.cx, cell.cy);
+  const colour = gridColour(cell.cx, cell.cy);
+  $('zoominfo').querySelector('b').textContent =
+    `${grid.left + cell.cx}, ${grid.top + cell.cy}  ${colour}`;
+});
+$('zoom').addEventListener('click', ev => {
+  if (!grid) return;
+  const cell = gridCell(ev); if (!cell) return;
+  const picked = { x: grid.left + cell.cx, y: grid.top + cell.cy,
+                   colour: gridColour(cell.cx, cell.cy) };
+  showProbe(picked, 'picked from the grid');
+  say(`picked ${picked.x},${picked.y} ${picked.colour}`, 'ok');
+});
 $('src').addEventListener('input', () => { paint(); updateAC(); });
 $('src').addEventListener('blur', hideAC);
 $('src').addEventListener('keydown', e => {

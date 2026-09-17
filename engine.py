@@ -37,6 +37,8 @@ NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 COMPARISONS = ("<", "<=", ">", ">=", "==", "!=", "contains")
 MOUSE_OPS = ("move", "moveto", "click", "mousedown", "mouseup",
              "scroll", "screen")
+# ops whose x/y are measured from the anchored window, when one is set
+ANCHORED_OPS = ("moveto", "getpixel", "waitfor")
 # $$ is a literal '$'; $name is a reference. A bare '$' (as in "$5") stays literal.
 VAR = re.compile(r"\$(\$|[A-Za-z_][A-Za-z0-9_]*)")
 
@@ -143,6 +145,11 @@ def parse(source):
             if len(parts) > 2:
                 raise MacroError(f"line {lineno}: 'click' takes <button> <count>")
             instrs.append(Instruction("click", [button, count], lineno))
+        elif op == "anchor":
+            if not rest:
+                raise MacroError(
+                    f"line {lineno}: 'anchor' needs a window, or 'none'")
+            instrs.append(Instruction("anchor", [remainder.strip()], lineno))
         elif op == "paste":
             if not remainder.strip():
                 raise MacroError(f"line {lineno}: 'paste' needs some text")
@@ -347,6 +354,7 @@ def run(source, kb=None, max_steps=100_000, max_seconds=60.0, dry_run=False,
             mouse.place = agent_client.set_cursor
 
     counters, variables, steps = {}, {}, 0
+    anchor = {"origin": None, "name": None}
     started = time.monotonic()
     log = []
     try:
@@ -365,7 +373,7 @@ def run(source, kb=None, max_steps=100_000, max_seconds=60.0, dry_run=False,
             if on_step is not None:
                 on_step(instr.line, instr.op)
             pc = _step(instr, pc, kb, labels, counters, log, dry_run, stop,
-                       variables, table, mouse)
+                       variables, table, mouse, anchor)
     except MacroStopped as exc:
         exc.log = log
         raise
@@ -381,6 +389,14 @@ def run(source, kb=None, max_steps=100_000, max_seconds=60.0, dry_run=False,
         if owns_kb:
             kb.close()
     return log
+
+
+def _anchored(x, y, anchor):
+    """Shift window-relative coordinates into screen coordinates."""
+    if not anchor or not anchor.get("origin"):
+        return x, y
+    left, top = anchor["origin"]
+    return x + left, y + top
 
 
 def _compare(left, right, comparison, line):
@@ -417,8 +433,9 @@ def _check_combo(combo, line):
 
 
 def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
-          variables=None, table=None, mouse=None):
+          variables=None, table=None, mouse=None, anchor=None):
     variables = {} if variables is None else variables
+    anchor = {"origin": None, "name": None} if anchor is None else anchor
     op, args = instr.op, instr.args
 
     if op == "nop":
@@ -432,9 +449,11 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
             if mouse is not None:
                 mouse.screen = (values[0], values[1])
         elif op == "moveto":
-            log.append(f"moveto {values[0]},{values[1]}")
+            ax, ay = _anchored(values[0], values[1], anchor)
+            log.append(f"moveto {ax},{ay}" +
+                       (f" (in {anchor['name']!r})" if anchor["origin"] else ""))
             if mouse is not None:
-                mouse.move_to(values[0], values[1])
+                mouse.move_to(ax, ay)
         elif op == "move":
             log.append(f"move {values[0]},{values[1]}")
             if mouse is not None:
@@ -472,6 +491,25 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
         log.append(f"jumpif {variable}={left!r} {comparison} {right!r} -> "
                    f"{'jump to ' + target if hit else 'continue'}")
         return labels[target] if hit else pc + 1
+    if op == "anchor":
+        target = expand(args[0], variables, instr.line)
+        if target.lower() in ("none", "off", "screen"):
+            anchor["origin"], anchor["name"] = None, None
+            log.append("anchor cleared - coordinates are absolute again")
+            return pc + 1
+        if dry_run:
+            anchor["origin"], anchor["name"] = (0, 0), target
+            log.append(f"anchor {target!r} (dry run: origin assumed 0,0)")
+            return pc + 1
+        try:
+            found = agent_client.window(target)
+        except agent_client.AgentError as exc:
+            raise MacroError(f"line {instr.line}: {exc}") from None
+        box = found["client"]
+        anchor["origin"], anchor["name"] = (box["x"], box["y"]), found["title"]
+        log.append(f"anchor {found['title']!r} client origin "
+                   f"{box['x']},{box['y']} size {box['width']}x{box['height']}")
+        return pc + 1
     if op == "paste":
         text = expand(args[0], variables, instr.line)
         log.append(f"paste {text[:40]!r}{'...' if len(text) > 40 else ''}")
@@ -493,8 +531,8 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
         log.append(f"clip -> {args[0]} = {variables[args[0]][:40]!r}")
         return pc + 1
     if op == "getpixel":
-        x = as_number(args[0], variables, instr.line, "x")
-        y = as_number(args[1], variables, instr.line, "y")
+        x, y = _anchored(as_number(args[0], variables, instr.line, "x"),
+                         as_number(args[1], variables, instr.line, "y"), anchor)
         if dry_run:
             variables.setdefault(args[2], "#000000")
         else:
@@ -511,8 +549,8 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
             wanted = expand(spec, variables, instr.line).lower()
             describe = f"window {wanted!r}"
         else:
-            x = as_number(spec[0], variables, instr.line, "x")
-            y = as_number(spec[1], variables, instr.line, "y")
+            x, y = _anchored(as_number(spec[0], variables, instr.line, "x"),
+                             as_number(spec[1], variables, instr.line, "y"), anchor)
             wanted = expand(spec[2], variables, instr.line).lower()
             describe = f"pixel {x},{y} == {wanted}"
         if dry_run:
@@ -634,7 +672,7 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
             pct = as_number(pct, variables, instr.line, "chance percent")
         if random.randint(1, 100) <= pct:
             return _step(inner, pc, kb, labels, counters, log, dry_run, stop,
-                         variables, table, mouse)
+                         variables, table, mouse, anchor)
         log.append(f"chance {pct}% skipped")
         return pc + 1
     if op == "oneof":

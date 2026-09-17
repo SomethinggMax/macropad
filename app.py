@@ -43,8 +43,11 @@ def index():
 def status():
     agent_client.set_host(request.remote_addr)
     state = host_state()
+    found = agent_client.version() if agent_client.get_host() else 0
     return jsonify(state=state, connected=(state == "configured"),
-                   agent_host=agent_client.get_host())
+                   agent_host=agent_client.get_host(),
+                   agent_version=found, agent_wants=agent_client.WANT_VERSION,
+                   agent_stale=bool(found and found < agent_client.WANT_VERSION))
 
 
 @app.route("/api/probe")
@@ -55,6 +58,57 @@ def probe():
         at = agent_client.cursor()
         return jsonify(ok=True, x=at["x"], y=at["y"],
                        colour=agent_client.pixel(at["x"], at["y"]))
+    except agent_client.AgentError as exc:
+        return jsonify(ok=False, error=str(exc)), 503
+
+
+@app.route("/api/sample", methods=["POST"])
+def sample():
+    """Read the colour where the pointer is, without the pointer in the way.
+
+    GetPixel captures the cursor graphic as well as the screen, so a naive read
+    returns the arrow's own black outline or white body instead of the pixel
+    underneath. Park the pointer, read, then put it back.
+    """
+    agent_client.set_host(request.remote_addr)
+    try:
+        at = agent_client.cursor()
+        x, y = at["x"], at["y"]
+
+        parked = None
+        for offset in (220, -220):
+            moved = agent_client.set_cursor(x + offset, y + offset)
+            if abs(moved["x"] - x) > 60 or abs(moved["y"] - y) > 60:
+                parked = moved
+                break
+        if parked is None:  # nowhere to go, e.g. a tiny screen
+            return jsonify(ok=False,
+                           error="could not move the pointer clear of the sample"), 409
+
+        time.sleep(0.12)  # let the screen redraw without the cursor over it
+        colour = agent_client.pixel(x, y)
+        agent_client.set_cursor(x, y)
+        return jsonify(ok=True, x=x, y=y, colour=colour)
+    except agent_client.AgentError as exc:
+        return jsonify(ok=False, error=str(exc)), 503
+
+
+@app.route("/api/region")
+def region():
+    """Pixels around the pointer, so the UI can show a zoomed grid to click.
+
+    A grid is more reliable than reading the pixel under the cursor: the cursor
+    graphic is captured too, and on an elevated window the pointer cannot be
+    moved out of the way at all.
+    """
+    agent_client.set_host(request.remote_addr)
+    size = max(8, min(int(request.args.get("size", 32)), 128))
+    try:
+        at = agent_client.cursor()
+        left, top = at["x"] - size // 2, at["y"] - size // 2
+        block = agent_client.region(left, top, size, size)
+        return jsonify(ok=True, cursor=at, left=left, top=top,
+                       size=size, rgb=block["rgb"])
     except agent_client.AgentError as exc:
         return jsonify(ok=False, error=str(exc)), 503
 

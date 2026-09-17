@@ -8,6 +8,7 @@ agent answers those questions for it. Standard library + ctypes only.
 Then in the macro IDE on the Pi, pick a target window or use:  focus <title>
 """
 
+import base64
 import ctypes
 import json
 import time
@@ -16,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PORT = 8765
+VERSION = 3  # bumped whenever endpoints change, so the Pi can warn if stale
 DWMWA_CLOAKED = 14
 SW_RESTORE = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -23,6 +25,8 @@ SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
 SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 MONITORINFOF_PRIMARY = 1
 CF_UNICODETEXT = 13
+SRCCOPY = 0x00CC0020
+DIB_RGB_COLORS = 0
 GMEM_MOVEABLE = 0x0002
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -53,6 +57,20 @@ user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 gdi32.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
 gdi32.GetPixel.restype = wintypes.DWORD
+gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+gdi32.CreateCompatibleDC.restype = wintypes.HDC
+gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+gdi32.SelectObject.restype = wintypes.HGDIOBJ
+gdi32.BitBlt.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                         ctypes.c_int, wintypes.HDC, ctypes.c_int, ctypes.c_int,
+                         wintypes.DWORD]
+gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT,
+                            wintypes.UINT, ctypes.c_void_p, ctypes.c_void_p,
+                            wintypes.UINT]
+gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+gdi32.DeleteDC.argtypes = [wintypes.HDC]
 kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
 kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
 kernel32.GlobalLock.restype = ctypes.c_void_p
@@ -68,6 +86,20 @@ kernel32.QueryFullProcessImageNameW.argtypes = [
 ENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long),
+                ("biHeight", ctypes.c_long), ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", ctypes.c_long),
+                ("biYPelsPerMeter", ctypes.c_long),
+                ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+
+
+class BITMAPINFO(ctypes.Structure):
+    _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
+
+
 class RECT(ctypes.Structure):
     _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
                 ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
@@ -80,6 +112,10 @@ class MONITORINFO(ctypes.Structure):
 
 MONITORPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, wintypes.HDC,
                                  ctypes.POINTER(RECT), wintypes.LPARAM)
+
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
 
 
 def screen_info():
@@ -145,6 +181,27 @@ def _process(hwnd):
     return ""
 
 
+def _rects(hwnd):
+    """Window box and client box, both in screen coordinates.
+
+    The client box excludes the title bar and borders, so a position inside an
+    application should be measured from there. For a borderless window the two
+    are identical.
+    """
+    box = RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(box))
+    window = {"x": box.left, "y": box.top,
+              "width": box.right - box.left, "height": box.bottom - box.top}
+
+    inner = RECT()
+    user32.GetClientRect(hwnd, ctypes.byref(inner))
+    origin = wintypes.POINT(0, 0)
+    user32.ClientToScreen(hwnd, ctypes.byref(origin))
+    client = {"x": origin.x, "y": origin.y,
+              "width": inner.right - inner.left, "height": inner.bottom - inner.top}
+    return window, client
+
+
 def list_windows():
     found = []
 
@@ -152,7 +209,10 @@ def list_windows():
         if user32.IsWindowVisible(hwnd) and not _cloaked(hwnd):
             name = _title(hwnd)
             if name:
-                found.append({"id": int(hwnd), "title": name, "exe": _process(hwnd)})
+                window, client = _rects(hwnd)
+                found.append({"id": int(hwnd), "title": name,
+                              "exe": _process(hwnd),
+                              "rect": window, "client": client})
         return True
 
     user32.EnumWindows(ENUMPROC(collect), 0)
@@ -204,6 +264,43 @@ def foreground_window():
     if not handle:
         return None
     return {"id": int(handle), "title": _title(handle), "exe": _process(handle)}
+
+
+def capture_region(x, y, width, height):
+    """Grab a block of screen pixels as base64 RGB, one blit rather than
+    width*height GetPixel calls (which would take seconds)."""
+    screen = user32.GetDC(None)
+    memory = gdi32.CreateCompatibleDC(screen)
+    bitmap = gdi32.CreateCompatibleBitmap(screen, width, height)
+    previous = gdi32.SelectObject(memory, bitmap)
+    try:
+        if not gdi32.BitBlt(memory, 0, 0, width, height, screen, x, y, SRCCOPY):
+            return None
+        info = BITMAPINFO()
+        info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        info.bmiHeader.biWidth = width
+        info.bmiHeader.biHeight = -height  # negative: rows top-down
+        info.bmiHeader.biPlanes = 1
+        info.bmiHeader.biBitCount = 32
+        info.bmiHeader.biCompression = 0  # BI_RGB
+        buffer = (ctypes.c_char * (width * height * 4))()
+        if not gdi32.GetDIBits(memory, bitmap, 0, height, buffer,
+                               ctypes.byref(info), DIB_RGB_COLORS):
+            return None
+        raw = bytes(buffer)
+    finally:
+        gdi32.SelectObject(memory, previous)
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(memory)
+        user32.ReleaseDC(None, screen)
+
+    rgb = bytearray(width * height * 3)
+    for index in range(width * height):
+        blue, green, red = raw[index * 4], raw[index * 4 + 1], raw[index * 4 + 2]
+        rgb[index * 3] = red
+        rgb[index * 3 + 1] = green
+        rgb[index * 3 + 2] = blue
+    return base64.b64encode(bytes(rgb)).decode()
 
 
 def cursor_position():
@@ -294,7 +391,25 @@ class Handler(BaseHTTPRequestHandler):
         self._send({"ok": True})
 
     def do_GET(self):
-        if self.path.startswith("/foreground"):
+        if self.path.startswith("/window?") or self.path == "/window":
+            query = parse_qs(urlparse(self.path).query)
+            target = (query.get("target") or [""])[0]
+            found = find_window(target) if target else None
+            self._send({"ok": found is not None, "window": found,
+                        "error": None if found else f"no window matching {target!r}"})
+        elif self.path.startswith("/region"):
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                x = int(query["x"][0]); y = int(query["y"][0])
+                width = max(1, min(int(query.get("w", ["32"])[0]), 128))
+                height = max(1, min(int(query.get("h", ["32"])[0]), 128))
+            except (KeyError, ValueError, IndexError):
+                return self._send({"ok": False, "error": "need x and y"}, 400)
+            data = capture_region(x, y, width, height)
+            self._send({"ok": data is not None, "x": x, "y": y,
+                        "w": width, "h": height, "rgb": data,
+                        "error": None if data else "screen capture failed"})
+        elif self.path.startswith("/foreground"):
             current = foreground_window()
             self._send({"ok": current is not None, "window": current})
         elif self.path.startswith("/cursor"):
@@ -316,7 +431,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/windows"):
             self._send({"ok": True, "windows": list_windows()})
         elif self.path.startswith("/ping"):
-            self._send({"ok": True, "agent": "windows", "version": 1})
+            self._send({"ok": True, "agent": "windows", "version": VERSION})
         else:
             self._send({"ok": False, "error": "not found"}, 404)
 
@@ -329,7 +444,25 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path.startswith("/clipboard"):
             return self._send({"ok": set_clipboard(str(data.get("text", "")))})
-        if self.path.startswith("/foreground"):
+        if self.path.startswith("/window?") or self.path == "/window":
+            query = parse_qs(urlparse(self.path).query)
+            target = (query.get("target") or [""])[0]
+            found = find_window(target) if target else None
+            self._send({"ok": found is not None, "window": found,
+                        "error": None if found else f"no window matching {target!r}"})
+        elif self.path.startswith("/region"):
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                x = int(query["x"][0]); y = int(query["y"][0])
+                width = max(1, min(int(query.get("w", ["32"])[0]), 128))
+                height = max(1, min(int(query.get("h", ["32"])[0]), 128))
+            except (KeyError, ValueError, IndexError):
+                return self._send({"ok": False, "error": "need x and y"}, 400)
+            data = capture_region(x, y, width, height)
+            self._send({"ok": data is not None, "x": x, "y": y,
+                        "w": width, "h": height, "rgb": data,
+                        "error": None if data else "screen capture failed"})
+        elif self.path.startswith("/foreground"):
             current = foreground_window()
             self._send({"ok": current is not None, "window": current})
         elif self.path.startswith("/cursor"):
@@ -371,6 +504,6 @@ if __name__ == "__main__":
         print(f"  {m['width']}x{m['height']} at ({m['x']},{m['y']})"
               f"{' [primary]' if m['primary'] else ''}")
     print(f"Macropad agent listening on port {PORT}  "
-          f"(windows, focus, screen, cursor, clipboard, pixel)")
+          f"(windows, focus, screen, cursor, clipboard, pixel, region)")
     print(f"Found {len(list_windows())} windows. Leave this running.\n")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
