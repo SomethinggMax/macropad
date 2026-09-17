@@ -350,7 +350,11 @@ def events():
     """
     def stream():
         seen_step, last_state = 0, None
-        deadline = time.monotonic() + 3600  # never hold a worker thread forever
+        # A generator only learns the client has gone when a write fails, and
+        # this one writes only on change - so without a heartbeat an idle
+        # stream spins on a worker thread long after the browser closed it.
+        last_sent = time.monotonic()
+        deadline = time.monotonic() + 3600
         while time.monotonic() < deadline:
             # drain everything the engine has done since the last message, so
             # no line is skipped even if it ran in microseconds
@@ -359,6 +363,7 @@ def events():
             if fresh:
                 seen_step = fresh[-1][0]
                 last_state = state
+                last_sent = time.monotonic()
                 yield "data: " + json.dumps({
                     "running": progress["running"], "macro": progress["macro"],
                     "step": fresh[-1][0], "line": fresh[-1][1],
@@ -367,10 +372,14 @@ def events():
                     "count": len(fresh)}) + "\n\n"
             elif state != last_state:
                 last_state = state
+                last_sent = time.monotonic()
                 yield "data: " + json.dumps({
                     "running": progress["running"], "macro": progress["macro"],
                     "step": progress["step"], "line": progress["line"],
                     "op": progress["op"], "lines": [], "count": 0}) + "\n\n"
+            elif time.monotonic() - last_sent > 2:
+                last_sent = time.monotonic()
+                yield ": keepalive\n\n"  # a failed write ends this thread
             time.sleep(0.025)
         yield "event: expired\ndata: {}\n\n"
 
