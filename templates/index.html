@@ -430,6 +430,27 @@ let liveTimer = null, probed = null;
 
 let frameUnavailable = false;
 
+function winArea(w) {
+  return w.area || (w.rect ? w.rect.width * w.rect.height : 0);
+}
+function winLabel(w) {
+  const size = w.rect ? ` ${w.rect.width}x${w.rect.height}` : '';
+  const cls = w.class ? ` [${w.class}]` : '';
+  return `${w.exe} — ${w.title}${size}${cls}`;
+}
+
+/* An anchor target that resolves to THIS window and no other. Windows sharing
+   exe, title and class can only be separated by the matcher's ordering, which
+   is largest-first, so qualify with #N when there is more than one. */
+function anchorTarget(win) {
+  const siblings = winCache
+    .filter(w => w.exe === win.exe)
+    .sort((a, b) => winArea(b) - winArea(a));
+  const n = siblings.findIndex(w => String(w.id) === String(win.id)) + 1;
+  const base = `exe:${win.exe}`;
+  return siblings.length > 1 ? `${base}#${n}` : base;
+}
+
 function chosenFrame() {
   frameUnavailable = false;
   const id = $('frame').value;
@@ -460,7 +481,8 @@ function showProbe(p, note) {
   const rel = inFrame(p);
   let extra = frameUnavailable ? 'agent too old for window coords' : note;
   if (rel) {
-    extra = `in ${esc(rel.win.exe)}: <b style="color:var(--accent)">${rel.rx}, ${rel.ry}</b>` +
+    extra = `in ${esc(rel.win.exe)} ${rel.win.rect ? rel.win.rect.width + 'x' + rel.win.rect.height : ''}: ` +
+            `<b style="color:var(--accent)">${rel.rx}, ${rel.ry}</b>` +
             (rel.inside ? '' : ' <span style="color:var(--bad)">(outside that window)</span>') +
             `<br>${note}`;
   }
@@ -587,7 +609,7 @@ function insertProbe(kind) {
            : `moveto ${x} ${y}`;
   if (rel) {
     // window-relative numbers are wrong without the matching anchor, so add it
-    const want = `anchor ${rel.win.exe}`;
+    const want = `anchor ${anchorTarget(rel.win)}`;
     if (!$('src').value.includes(want)) line = want + '\n' + line;
     if (!rel.inside) say('warning: that point is outside the chosen window', 'err');
   }
@@ -713,12 +735,10 @@ async function loadWindows() {
     winCache = d.windows;
     const frame = $('frame'), keepFrame = frame.value;
     frame.innerHTML = '<option value="">screen (absolute)</option>' +
-      d.windows.map(w => `<option value="${w.id}" title="class: ${esc(w.class || '?')}">` +
-        `${esc(w.exe)} — ${esc(w.title)}${w.class ? ' [' + esc(w.class) + ']' : ''}</option>`).join('');
+      d.windows.map(w => `<option value="${w.id}">${esc(winLabel(w))}</option>`).join('');
     frame.value = keepFrame;
     sel.innerHTML = '<option value="">— none (use countdown) —</option>' +
-      d.windows.map(w => `<option value="${w.id}" title="class: ${esc(w.class || '?')}">` +
-        `${esc(w.exe)} — ${esc(w.title)}${w.class ? ' [' + esc(w.class) + ']' : ''}</option>`).join('');
+      d.windows.map(w => `<option value="${w.id}">${esc(winLabel(w))}</option>`).join('');
     sel.value = keep;
     if (!d.windows.length) say('agent reachable but reported no windows');
   } catch (e) {

@@ -64,6 +64,11 @@ def main():
         ("exe:launcher.exe",       103, "exe field match"),
         ("Discord",                104, "unrelated window"),
         ("Launcher",               103, "substring of a longer title"),
+        # the IDE's pixel picker emits exactly these, and the numbering must
+        # agree with what it computed, or coordinates land on the wrong window
+        ("exe:MapleStory.exe#1", 527280, "picker's anchor for the game window"),
+        ("exe:MapleStory.exe#2", 986860, "picker's anchor for the chat window"),
+        ("exe:Discord.exe",         104, "picker's anchor when exe is unique"),
     ]
     failures = 0
     for target, expect, note in cases:
