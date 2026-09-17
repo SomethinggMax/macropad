@@ -1,0 +1,26 @@
+# Short demo for the README header GIF (~12 seconds).
+# Setup: an EMPTY Notepad, PC agent running.
+
+focus Notepad
+waitfor window Notepad 5000
+delay 400
+
+type A Raspberry Pi, typing as a real USB keyboard.
+key enter
+paste Clipboard handles the rest: — 🎉 äéñ 中文
+key enter
+
+set n 0
+repeat 3
+  add n 1
+  type loop pass $n
+  key enter
+  delay 110-200
+end
+
+moveto 800 400
+delay 250
+moveto 1700 850
+delay 250
+click left 2
+type  ...and a real mouse.

@@ -275,7 +275,9 @@ def parse(source):
             raise MacroError(
                 f"line {instr.line}: jumpif unknown label {instr.args[3]!r}")
 
-    assigned = {i.args[0] for i in instrs if i.op in ("set", "add")}
+    # every op that defines a variable, and where its name sits in args
+    assigned = {i.args[0] for i in instrs if i.op in ("set", "add", "clip")}
+    assigned |= {i.args[2] for i in instrs if i.op == "getpixel"}
     for instr in instrs:
         if instr.op == "jumpif" and instr.args[0] not in assigned:
             raise MacroError(

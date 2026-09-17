@@ -2,6 +2,6 @@ __pycache__/
 *.pyc
 .agent-host
 macros/*.macro
-!macros/demo.macro
+!macros/demo-full.macro
+!macros/demo-short.macro
 !macros/variables-demo.macro
-!macros/hold-demo.macro

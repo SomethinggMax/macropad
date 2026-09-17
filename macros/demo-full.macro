@@ -1,0 +1,87 @@
+# ===================================================================
+#  macropad - full feature demo
+#  Setup: an EMPTY Notepad, PC agent running.
+#  Mouse coordinates assume a 2560x1440 primary monitor - adjust them
+#  to whatever region you are recording.
+# ===================================================================
+
+focus Notepad
+waitfor window Notepad 5000
+delay 500
+
+# --- real keystrokes, and what keystrokes cannot do ---
+type macropad: a Raspberry Pi that types.
+key enter
+type Real HID keys, layout aware: cafe, "quoted", ~tilde, #1, 100%
+key enter
+paste paste goes further: em-dash — emoji 🎉 accents äéñ 中文 ≈ ∞
+key enter
+key enter
+
+# --- a modifier held across a whole command ---
+hold shift
+type a modifier can stay held down
+release shift
+key enter
+key enter
+
+# --- variables, arithmetic and loops ---
+set who world
+set n 0
+repeat 3
+  add n 1
+  type line $n for $who
+  key enter
+  delay 120-260
+end
+key enter
+
+# --- conditionals: jump while a counter holds ---
+set i 5
+label countdown
+  type $i...
+  delay 200
+  add i -1
+  jumpif i > 0 countdown
+type liftoff
+key enter
+key enter
+
+# --- randomness: pick one, and random delays ---
+repeat 4
+  oneof alpha|beta|gamma|delta
+  type , 
+  delay 80-220
+end
+key enter
+key enter
+
+# --- reading the screen back ---
+getpixel 1280 40 col
+type it can read the screen too - pixel 1280,40 is $col
+key enter
+key enter
+
+# --- the mouse: absolute, pixel exact ---
+type and it drives a real mouse:
+moveto 700 300
+delay 300
+moveto 1800 300
+delay 300
+moveto 1800 1000
+delay 300
+moveto 700 1000
+delay 300
+moveto 700 300
+delay 400
+moveto 1250 700
+click left 2
+delay 250
+scroll -3
+delay 250
+scroll 3
+delay 300
+
+key enter
+key enter
+type github.com/SomethinggMax/macropad
