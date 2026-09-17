@@ -34,7 +34,13 @@ def parse_combo(combo):
         raise ValueError("empty key combo")
     for part in parts[:-1]:
         if part not in MODIFIERS:
-            raise ValueError(f"unknown modifier: {part!r}")
+            if part in KEYS:
+                raise ValueError(
+                    f"{part!r} is a key, not a modifier - modifiers come first "
+                    f"in a combo, so write e.g. ctrl+{part}")
+            raise ValueError(
+                f"unknown modifier: {part!r} (use "
+                f"{', '.join(sorted({'ctrl', 'shift', 'alt', 'gui', 'altgr'}))})")
         mods |= MODIFIERS[part]
     last = parts[-1]
     if last in KEYS:

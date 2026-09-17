@@ -424,7 +424,12 @@ def parse_hotkey(combo):
     flags = 0
     for part in parts[:-1]:
         if part not in HOTKEY_MODS:
-            raise ValueError(f"unknown modifier {part!r}")
+            if part in VIRTUAL_KEYS:
+                raise ValueError(
+                    f"{part!r} is a key, not a modifier - write it last, "
+                    f"e.g. ctrl+{part}")
+            raise ValueError(
+                f"unknown modifier {part!r} (use ctrl, alt, shift or win)")
         flags |= HOTKEY_MODS[part]
     key = VIRTUAL_KEYS.get(parts[-1])
     if key is None:
