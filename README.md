@@ -99,6 +99,9 @@ scroll -3
 mousedown left / mouseup      # drag
 
 focus Chrome                  # needs the agent
+focus class:UnityWndClass     # or exe:, title:, a window id, or #2 for the
+                              # second match. Ties go to the largest window
+anchor class:UnityWndClass    # make x/y relative to that window's client area
 waitfor window Chrome 5000
 paste anything — even 🎉 or 中文
 clip var                      # read the PC clipboard
@@ -159,6 +162,11 @@ to establish an origin and steps out from there.
 **The virtual desktop's corner may not exist.** With mismatched or offset
 monitors the bounding box has dead space no monitor covers, so the pointer stops
 somewhere else entirely. The agent reports where it actually landed.
+
+**An elevated app cannot be focused by a normal-privilege agent.** Windows
+blocks it outright, so `focus` fails on anything running as administrator. Run
+the agent as administrator too - or skip the API entirely and click the window
+with the HID mouse, which is real hardware input and always allowed.
 
 **Under-volting corrupts SD cards.** A PC USB port cannot run a Pi 4. Check
 `vcgencmd get_throttled` — anything but `0x0` means fix your power first.

@@ -33,16 +33,21 @@ def load():
     return module
 
 
-# a game whose chat window shares its name, plus decoys
+def win(wid, title, exe, cls, z, w, h):
+    return {"id": wid, "title": title, "exe": exe, "class": cls, "z": z,
+            "rect": {"x": 0, "y": 0, "width": w, "height": h},
+            "client": {"x": 0, "y": 0, "width": w, "height": h},
+            "area": w * h}
+
+
+# Max's real case: two MapleStory windows, same title AND same class, told
+# apart only by size - the small one is the chat window and sits above the
+# game in z-order, so topmost-first picked the wrong one.
 WINDOWS = [
-    {"id": 101, "title": "Some Game", "exe": "game.exe",
-     "class": "UnityWndClass", "z": 0},
-    {"id": 102, "title": "Some Game", "exe": "game.exe",
-     "class": "GameChatWindow", "z": 1},
-    {"id": 103, "title": "Some Game - Launcher", "exe": "launcher.exe",
-     "class": "Chrome_WidgetWin_1", "z": 2},
-    {"id": 104, "title": "Discord", "exe": "Discord.exe",
-     "class": "Chrome_WidgetWin_1", "z": 3},
+    win(986860, "MapleStory", "MapleStory.exe", "MapleStoryClass", 5, 410, 806),
+    win(527280, "MapleStory", "MapleStory.exe", "MapleStoryClass", 6, 1928, 1111),
+    win(103, "Some Game - Launcher", "launcher.exe", "Chrome_WidgetWin_1", 2, 800, 600),
+    win(104, "Discord", "Discord.exe", "Chrome_WidgetWin_1", 3, 1200, 800),
 ]
 
 
@@ -51,12 +56,12 @@ def main():
     agent.list_windows = lambda: [dict(w) for w in WINDOWS]
 
     cases = [
-        ("Some Game",              101, "plain substring -> topmost match"),
-        ("Some Game#2",            102, "#2 -> second match"),
-        ("class:GameChatWindow",   102, "class picks the chat window"),
-        ("class:UnityWndClass",    101, "class picks the game window"),
+        ("MapleStory",          527280, "identical title+class -> biggest wins"),
+        ("MapleStory#2",        986860, "#2 -> the smaller chat window"),
+        ("527280",              527280, "explicit window id"),
+        ("986860",              986860, "explicit window id, the small one"),
+        ("exe:MapleStory.exe",  527280, "exe match still prefers the big window"),
         ("exe:launcher.exe",       103, "exe field match"),
-        ("102",                    102, "explicit window id"),
         ("Discord",                104, "unrelated window"),
         ("Launcher",               103, "substring of a longer title"),
     ]
@@ -68,15 +73,16 @@ def main():
         failures += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} {target:24} -> {got_id}  ({note})")
 
-    for target in ["nothing here", "Some Game#9"]:
+    for target in ["nothing here", "MapleStory#9"]:
         got = agent.find_window(target)
         ok = got is None
         failures += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} {target:24} -> {got} (should be None)")
 
-    matches, _ = agent.match_windows("Some Game")
-    print(f"\n  'Some Game' matches {len(matches)} windows: "
-          + ", ".join(f"#{n+1} {w['class']}" for n, w in enumerate(matches)))
+    matches, _ = agent.match_windows("MapleStory")
+    print("\n  'MapleStory' matches, in the order focus would try them:")
+    for n, w in enumerate(matches):
+        print(f"    #{n+1} {w['rect']['width']}x{w['rect']['height']} id={w['id']}")
     return 1 if failures else 0
 
 

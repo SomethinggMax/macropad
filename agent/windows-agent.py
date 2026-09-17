@@ -17,10 +17,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PORT = 8765
-VERSION = 4  # bumped whenever endpoints change, so the Pi can warn if stale
+VERSION = 5  # bumped whenever endpoints change, so the Pi can warn if stale
 DWMWA_CLOAKED = 14
 SW_RESTORE = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+PROCESS_QUERY_INFORMATION = 0x0400
+ERROR_ACCESS_DENIED = 5
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
 SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 MONITORINFOF_PRIMARY = 1
@@ -190,6 +192,22 @@ def _class_name(hwnd):
     return buffer.value
 
 
+def _protected(hwnd):
+    """True when this window's process cannot be opened for full query.
+
+    That is what an elevated (or anti-cheat protected) process looks like from
+    a normal-privilege agent, and it is why SetForegroundWindow on it fails.
+    """
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    ctypes.set_last_error(0)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, False, pid.value)
+    if handle:
+        kernel32.CloseHandle(handle)
+        return False
+    return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+
+
 def _rects(hwnd):
     """Window box and client box, both in screen coordinates.
 
@@ -222,6 +240,8 @@ def list_windows():
                 found.append({"id": int(hwnd), "title": name,
                               "exe": _process(hwnd), "class": _class_name(hwnd),
                               "z": len(found),  # EnumWindows order: topmost first
+                              "area": window["width"] * window["height"],
+                              "protected": _protected(hwnd),
                               "rect": window, "client": client})
         return True
 
@@ -267,7 +287,9 @@ def match_windows(target):
             hit = value == needle if exact_only else needle in value
             if hit and not any(w["id"] == win["id"] for _, w in ranked):
                 ranked.append((rank, win))
-    ranked.sort(key=lambda pair: (pair[0], pair[1]["z"]))
+    # rank, then biggest window first, then topmost. A main window is almost
+    # always larger than the app's own side windows.
+    ranked.sort(key=lambda pair: (pair[0], -pair[1].get("area", 0), pair[1]["z"]))
     return [win for _, win in ranked], index
 
 
@@ -550,12 +572,20 @@ class Handler(BaseHTTPRequestHandler):
                                f"{target!r} has only {len(matches)} match(es)"}, 404)
         window = matches[index - 1]
         ok = focus(window["id"])
-        payload = {"ok": ok, "window": window,
-                   "error": None if ok else "window did not come to the foreground"}
+        problem = None
+        if not ok:
+            problem = "window did not come to the foreground"
+            if window.get("protected"):
+                problem += (" - that process is elevated or protected, so a "
+                            "normal-privilege agent cannot focus it. Run this "
+                            "agent as administrator, or click the window with "
+                            "the HID mouse instead (a real click always works)")
+        payload = {"ok": ok, "window": window, "error": problem}
         if len(matches) > 1:
             payload["ambiguous"] = [
                 {"n": n + 1, "title": w["title"], "exe": w["exe"],
-                 "class": w["class"], "id": w["id"]}
+                 "class": w["class"], "id": w["id"],
+                 "size": f"{w['rect']['width']}x{w['rect']['height']}"}
                 for n, w in enumerate(matches)]
         self._send(payload)
 

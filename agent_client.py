@@ -17,7 +17,7 @@ import urllib.request
 
 PORT = 8765
 TIMEOUT = 4.0
-WANT_VERSION = 4
+WANT_VERSION = 5
 # Remembered across restarts: the host is normally learned from the browser, so
 # without this every service restart would break agent features until someone
 # reloaded the IDE.
@@ -207,7 +207,7 @@ def focus(target):
         others = result.get("ambiguous") or []
         if len(others) > 1:
             choices = "; ".join(
-                f"#{o['n']} {o['exe']} class:{o['class']}" for o in others)
+                f"#{o['n']} {o.get('size', '?')} {o['exe']}" for o in others)
             message += f" - {len(others)} windows match, disambiguate with {choices}"
         raise AgentError(message)
     return result.get("window", {})
