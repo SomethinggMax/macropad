@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Web UI for writing, storing and firing macros."""
 
+import collections
 import json
 import re
 import threading
@@ -24,7 +25,11 @@ run_lock = threading.Lock()
 stop_event = threading.Event()
 # Latest source line the runner is on, polled by the UI to highlight it.
 progress = {"line": None, "op": None, "running": False,
-            "macro": None, "since": None}
+            "macro": None, "since": None, "step": 0}
+# Every step the engine takes, so the event stream reports lines that
+# execute faster than it can sample. Bounded: a runaway macro must not
+# grow this without limit.
+step_log = collections.deque(maxlen=4000)
 
 
 def macro_path(name):
@@ -304,9 +309,14 @@ def run_macro():
             return jsonify(ok=True, stopped=True, log=["stopped before start"])
 
         def track(line, op):
+            # step increments even when the line repeats, so a loop running the
+            # same line still registers as a change for the event stream
             progress["line"], progress["op"] = line, op
+            progress["step"] += 1
+            step_log.append((progress["step"], line, op))
 
-        progress.update(line=None, op=None, running=True,
+        step_log.clear()
+        progress.update(line=None, op=None, running=True, step=0,
                         macro=data.get("name") or "(unsaved editor macro)",
                         since=time.time())
         log = run(source, max_steps=200_000, max_seconds=300, stop=stop_event,
@@ -328,6 +338,46 @@ def run_macro():
 @app.route("/api/progress")
 def get_progress():
     return jsonify(**progress)
+
+
+@app.route("/api/events")
+def events():
+    """Push progress as it happens.
+
+    Polling cannot follow an engine that steps faster than the poll interval,
+    and cannot see a loop re-running the same line at all. This checks
+    frequently server-side but only sends on an actual change.
+    """
+    def stream():
+        seen_step, last_state = 0, None
+        deadline = time.monotonic() + 3600  # never hold a worker thread forever
+        while time.monotonic() < deadline:
+            # drain everything the engine has done since the last message, so
+            # no line is skipped even if it ran in microseconds
+            fresh = [item for item in list(step_log) if item[0] > seen_step]
+            state = (progress["running"], progress["macro"])
+            if fresh:
+                seen_step = fresh[-1][0]
+                last_state = state
+                yield "data: " + json.dumps({
+                    "running": progress["running"], "macro": progress["macro"],
+                    "step": fresh[-1][0], "line": fresh[-1][1],
+                    "op": fresh[-1][2],
+                    "lines": sorted({item[1] for item in fresh}),
+                    "count": len(fresh)}) + "\n\n"
+            elif state != last_state:
+                last_state = state
+                yield "data: " + json.dumps({
+                    "running": progress["running"], "macro": progress["macro"],
+                    "step": progress["step"], "line": progress["line"],
+                    "op": progress["op"], "lines": [], "count": 0}) + "\n\n"
+            time.sleep(0.025)
+        yield "event: expired\ndata: {}\n\n"
+
+    return app.response_class(
+        stream(), mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"})
 
 
 @app.route("/api/stop", methods=["POST"])

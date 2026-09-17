@@ -55,7 +55,7 @@
                 color: var(--ink); pointer-events: none; z-index: 0; }
   .editor textarea { position: relative; z-index: 1; display: block;
     background: transparent; color: transparent; caret-color: var(--ink);
-    min-height: 300px; resize: vertical; }
+    min-height: 460px; resize: vertical; }
   .editor textarea::selection { background: #2f4a73; color: transparent; }
   .c-cmd { color: #6ea8fe; font-weight: 600; }
   .c-num { color: #fbbf24; }
@@ -104,7 +104,7 @@
           color: var(--dim); margin-top: 10px; }
   .c-set { color: #38bdf8; font-style: italic; }
   .c-bad { color: #f87171; text-decoration: underline wavy #f8717166; }
-  .runview { margin: 0; width: 100%; min-height: 300px; max-height: 60vh;
+  .runview { margin: 0; width: 100%; min-height: 460px; max-height: 85vh;
     overflow: auto; background: #12141a; border: 1px solid var(--edge);
     border-radius: 6px; padding: 8px 10px; white-space: pre;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -113,6 +113,7 @@
                  border-left: 3px solid transparent; }
   .runview .ln.active { background: #1d3a5f; border-left-color: var(--accent);
                         color: #fff; }
+  .runview .ln.recent { background: #16283d; }
   .runview .num { display: inline-block; width: 2.5ch; margin-right: 12px;
                   color: #5b6373; user-select: none; text-align: right; }
   .log { margin-top: 12px; font-family: ui-monospace, Menlo, monospace; font-size: 12px;
@@ -464,14 +465,57 @@ function highlight(line) {
   const el = $('runview').querySelector(`.ln[data-line="${line}"]`);
   if (el) { el.classList.add('active'); el.scrollIntoView({ block: 'nearest' }); }
 }
-let progTimer = null;
+let progSource = null, progTimer = null, recentTimer = null;
+
+function markRecent(lines) {
+  const view = $('runview');
+  view.querySelectorAll('.ln.recent').forEach(e => e.classList.remove('recent'));
+  (lines || []).forEach(n => {
+    const el = view.querySelector(`.ln[data-line="${n}"]`);
+    if (el) el.classList.add('recent');
+  });
+  clearTimeout(recentTimer);
+  recentTimer = setTimeout(() => view.querySelectorAll('.ln.recent')
+    .forEach(e => e.classList.remove('recent')), 400);
+}
+
 function startProgress() {
+  // A stream, not polling: lines can execute faster than any poll interval,
+  // and a loop re-running one line produces no change for a poll to see.
+  let streamWorked = false;
+  try {
+    progSource = new EventSource('/api/events');
+    progSource.onmessage = ev => {
+      streamWorked = true;
+      const p = JSON.parse(ev.data);
+      if (!p.running) return;
+      highlight(p.line);
+      if (p.count > 1) markRecent(p.lines);
+    };
+    progSource.onerror = () => {
+      // EventSource also reports an error when it reconnects, which it does by
+      // itself. Only give up on streaming if it never worked at all.
+      if (!streamWorked) pollProgress();
+    };
+  } catch (e) { pollProgress(); }
+}
+
+function pollProgress() {
+  if (progSource) { progSource.close(); progSource = null; }
+  if (progTimer) return;
   progTimer = setInterval(async () => {
     try { const p = await api('/api/progress'); if (p.running) highlight(p.line); }
     catch {}
   }, 80);
 }
-function stopProgress() { clearInterval(progTimer); progTimer = null; highlight(null); }
+
+function stopProgress() {
+  if (progSource) { progSource.close(); progSource = null; }
+  clearInterval(progTimer); progTimer = null;
+  clearTimeout(recentTimer);
+  $('runview').querySelectorAll('.ln.recent').forEach(e => e.classList.remove('recent'));
+  highlight(null);
+}
 
 let winCache = [], keyCache = [], acItems = [], acIndex = 0, acPartial = '';
 
@@ -923,6 +967,20 @@ $('zoom').addEventListener('click', ev => {
   showProbe(picked, 'picked from the grid');
   say(`picked ${picked.x},${picked.y} ${picked.colour}`, 'ok');
 });
+try {
+  const saved = localStorage.getItem('editorHeight');
+  if (saved) { $('src').style.height = saved; $('runview').style.height = saved; }
+} catch (e) { /* private window or blocked storage */ }
+
+if (window.ResizeObserver) {
+  new ResizeObserver(() => {
+    const h = $('src').style.height;
+    if (!h) return;
+    $('runview').style.height = h;   // so switching views does not jump
+    try { localStorage.setItem('editorHeight', h); } catch (e) {}
+  }).observe($('src'));
+}
+
 $('src').addEventListener('input', () => { paint(); updateAC(); });
 $('src').addEventListener('blur', hideAC);
 $('src').addEventListener('keydown', e => {
