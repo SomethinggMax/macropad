@@ -653,7 +653,13 @@ function acSuggest(ctx) {
     return winCache
       .filter(w => !q || (w.title + ' ' + w.exe).toLowerCase().includes(q))
       .slice(0, 8)
-      .map(w => ({ label: w.title, note: w.exe, insert: w.title }));
+      .flatMap(w => {
+        const rows = [{ label: w.title, note: w.exe, insert: w.title }];
+        if (w.class) rows.push({ label: 'class:' + w.class,
+                                 note: w.exe + ' (exact window)',
+                                 insert: 'class:' + w.class });
+        return rows;
+      });
   }
   const out = [];
   for (const g of keyCache) for (const k of g.keys) {
@@ -707,10 +713,12 @@ async function loadWindows() {
     winCache = d.windows;
     const frame = $('frame'), keepFrame = frame.value;
     frame.innerHTML = '<option value="">screen (absolute)</option>' +
-      d.windows.map(w => `<option value="${w.id}">${esc(w.exe)} — ${esc(w.title)}</option>`).join('');
+      d.windows.map(w => `<option value="${w.id}" title="class: ${esc(w.class || '?')}">` +
+        `${esc(w.exe)} — ${esc(w.title)}${w.class ? ' [' + esc(w.class) + ']' : ''}</option>`).join('');
     frame.value = keepFrame;
     sel.innerHTML = '<option value="">— none (use countdown) —</option>' +
-      d.windows.map(w => `<option value="${w.id}">${esc(w.exe)} — ${esc(w.title)}</option>`).join('');
+      d.windows.map(w => `<option value="${w.id}" title="class: ${esc(w.class || '?')}">` +
+        `${esc(w.exe)} — ${esc(w.title)}${w.class ? ' [' + esc(w.class) + ']' : ''}</option>`).join('');
     sel.value = keep;
     if (!d.windows.length) say('agent reachable but reported no windows');
   } catch (e) {

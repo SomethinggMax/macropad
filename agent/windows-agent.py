@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PORT = 8765
-VERSION = 3  # bumped whenever endpoints change, so the Pi can warn if stale
+VERSION = 4  # bumped whenever endpoints change, so the Pi can warn if stale
 DWMWA_CLOAKED = 14
 SW_RESTORE = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -116,6 +116,7 @@ MONITORPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, wintypes.HDC,
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
 user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
 user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 
 
 def screen_info():
@@ -181,6 +182,14 @@ def _process(hwnd):
     return ""
 
 
+def _class_name(hwnd):
+    """Window class: usually stable and differs between an app's own windows,
+    which makes it the best way to tell a game from its chat window."""
+    buffer = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buffer, 256)
+    return buffer.value
+
+
 def _rects(hwnd):
     """Window box and client box, both in screen coordinates.
 
@@ -211,34 +220,72 @@ def list_windows():
             if name:
                 window, client = _rects(hwnd)
                 found.append({"id": int(hwnd), "title": name,
-                              "exe": _process(hwnd),
+                              "exe": _process(hwnd), "class": _class_name(hwnd),
+                              "z": len(found),  # EnumWindows order: topmost first
                               "rect": window, "client": client})
         return True
 
     user32.EnumWindows(ENUMPROC(collect), 0)
-    found.sort(key=lambda w: (w["exe"].lower(), w["title"].lower()))
     return found
 
 
-def find_window(target):
-    """Match by exact window id, else case-insensitive substring of title or exe."""
+def match_windows(target):
+    """Every window matching a target, best match first.
+
+    Targets can be a window id, a plain substring of the title or exe, a
+    field-qualified form (`exe:`, `title:`, `class:`), and may end in `#2` to
+    take the second match. Candidates are ordered topmost-first so `#1` is the
+    most recently active one, which is what a person means by "the" window.
+    """
     windows = list_windows()
-    if isinstance(target, int) or str(target).isdigit():
+    target = str(target).strip()
+
+    index = 1
+    if "#" in target:
+        head, _, tail = target.rpartition("#")
+        if tail.isdigit() and head.strip():
+            target, index = head.strip(), int(tail)
+
+    if target.isdigit():
+        exact = [w for w in windows if w["id"] == int(target)]
+        return exact, index
+
+    field = None
+    for name in ("exe", "title", "class"):
+        if target.lower().startswith(name + ":"):
+            field, target = name, target[len(name) + 1:].strip()
+            break
+
+    needle = target.lower()
+    fields = [field] if field else ["title", "exe", "class"]
+
+    ranked = []
+    for rank, (key, exact_only) in enumerate(
+            [(f, True) for f in fields] + [(f, False) for f in fields]):
         for win in windows:
-            if win["id"] == int(target):
-                return win
+            value = str(win.get(key, "")).lower()
+            hit = value == needle if exact_only else needle in value
+            if hit and not any(w["id"] == win["id"] for _, w in ranked):
+                ranked.append((rank, win))
+    ranked.sort(key=lambda pair: (pair[0], pair[1]["z"]))
+    return [win for _, win in ranked], index
+
+
+def find_window(target):
+    matches, index = match_windows(target)
+    if not matches or index > len(matches):
         return None
-    needle = str(target).lower()
-    for key in ("title", "exe"):
-        for win in windows:
-            if needle in win[key].lower():
-                return win
-    return None
+    return matches[index - 1]
 
 
 def focus(hwnd):
-    """Raise a window, working around Windows' foreground-stealing protection."""
-    hwnd = wintypes.HWND(int(hwnd))
+    """Raise a window, working around Windows' foreground-stealing protection.
+
+    Focus changes are applied asynchronously, so confirmation has to be polled;
+    checking immediately reports failure for a switch that is about to succeed.
+    """
+    wanted = int(hwnd)
+    hwnd = wintypes.HWND(wanted)
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, SW_RESTORE)
 
@@ -255,7 +302,24 @@ def focus(hwnd):
         if attached:
             user32.AttachThreadInput(this_thread, target_thread, False)
 
-    return int(user32.GetForegroundWindow() or 0) == int(hwnd.value)
+    deadline = time.monotonic() + 0.8
+    while time.monotonic() < deadline:
+        current = int(user32.GetForegroundWindow() or 0)
+        if current == wanted:
+            return True
+        time.sleep(0.03)
+
+    # The app may have handed focus to one of its own windows (a game moving
+    # focus to its chat box, say). That is a success for macro purposes, but
+    # say which window actually holds it.
+    current = int(user32.GetForegroundWindow() or 0)
+    if current:
+        ours, theirs = wintypes.DWORD(), wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(ours))
+        user32.GetWindowThreadProcessId(wintypes.HWND(current), ctypes.byref(theirs))
+        if ours.value and ours.value == theirs.value:
+            return True
+    return False
 
 
 def foreground_window():
@@ -477,12 +541,23 @@ class Handler(BaseHTTPRequestHandler):
         target = data.get("target")
         if target in (None, ""):
             return self._send({"ok": False, "error": "no target given"}, 400)
-        window = find_window(target)
-        if window is None:
-            return self._send({"ok": False, "error": f"no window matching {target!r}"}, 404)
+        matches, index = match_windows(target)
+        if not matches:
+            return self._send({"ok": False,
+                               "error": f"no window matching {target!r}"}, 404)
+        if index > len(matches):
+            return self._send({"ok": False, "error":
+                               f"{target!r} has only {len(matches)} match(es)"}, 404)
+        window = matches[index - 1]
         ok = focus(window["id"])
-        self._send({"ok": ok, "window": window,
-                    "error": None if ok else "window did not come to the foreground"})
+        payload = {"ok": ok, "window": window,
+                   "error": None if ok else "window did not come to the foreground"}
+        if len(matches) > 1:
+            payload["ambiguous"] = [
+                {"n": n + 1, "title": w["title"], "exe": w["exe"],
+                 "class": w["class"], "id": w["id"]}
+                for n, w in enumerate(matches)]
+        self._send(payload)
 
     def log_message(self, fmt, *args):
         print("  " + fmt % args)
