@@ -169,6 +169,12 @@ key enter"></textarea>
     <div class="picker">
       <div id="swatch" class="swatch"></div>
       <div id="readout" class="readout">—<small>move your mouse on the PC</small></div>
+      <label style="color:var(--dim)">coords
+        <select id="frame" style="max-width:200px"
+                title="insert screen coordinates, or coordinates relative to a window">
+          <option value="">screen (absolute)</option>
+        </select>
+      </label>
       <button id="livebtn" class="act" onclick="toggleLive()">▶ Live</button>
       <button class="act" onclick="captureSoon()">◉ Capture in 3s</button>
       <button class="act" onclick="zoomSoon()">⊞ Zoom grid</button>
@@ -422,10 +428,43 @@ let winCache = [], keyCache = [], acItems = [], acIndex = 0, acPartial = '';
 
 let liveTimer = null, probed = null;
 
+let frameUnavailable = false;
+
+function chosenFrame() {
+  frameUnavailable = false;
+  const id = $('frame').value;
+  if (!id) return null;
+  const win = winCache.find(w => String(w.id) === String(id));
+  if (!win) return null;
+  if (!win.client) {
+    // agent too old to report client rects - say so rather than quietly
+    // inserting absolute numbers that look window-relative
+    frameUnavailable = true;
+    return null;
+  }
+  return win;
+}
+
+function inFrame(p) {
+  const win = chosenFrame();
+  if (!win) return null;
+  const c = win.client;
+  const rx = p.x - c.x, ry = p.y - c.y;
+  return { win, rx, ry,
+           inside: rx >= 0 && ry >= 0 && rx < c.width && ry < c.height };
+}
+
 function showProbe(p, note) {
   probed = p;
   $('swatch').style.background = p.colour;
-  $('readout').innerHTML = `${p.x}, ${p.y}  ${p.colour}<small>${note}</small>`;
+  const rel = inFrame(p);
+  let extra = frameUnavailable ? 'agent too old for window coords' : note;
+  if (rel) {
+    extra = `in ${esc(rel.win.exe)}: <b style="color:var(--accent)">${rel.rx}, ${rel.ry}</b>` +
+            (rel.inside ? '' : ' <span style="color:var(--bad)">(outside that window)</span>') +
+            `<br>${note}`;
+  }
+  $('readout').innerHTML = `${p.x}, ${p.y}  ${p.colour}<small>${extra}</small>`;
 }
 
 async function sampleProbe(note) {
@@ -537,10 +576,21 @@ function gridCell(ev) {
 
 function insertProbe(kind) {
   if (!probed) return say('nothing captured yet — hit Capture first', 'err');
-  const { x, y, colour } = probed;
-  const line = kind === 'getpixel' ? `getpixel ${x} ${y} col`
-             : kind === 'waitfor'  ? `waitfor pixel ${x} ${y} ${colour} 10000`
-             : `moveto ${x} ${y}`;
+  const rel = inFrame(probed);
+  if (!rel && frameUnavailable)
+    return say('your agent is too old to report window coordinates — re-download it', 'err');
+  const { colour } = probed;
+  const x = rel ? rel.rx : probed.x;
+  const y = rel ? rel.ry : probed.y;
+  let line = kind === 'getpixel' ? `getpixel ${x} ${y} col`
+           : kind === 'waitfor'  ? `waitfor pixel ${x} ${y} ${colour} 10000`
+           : `moveto ${x} ${y}`;
+  if (rel) {
+    // window-relative numbers are wrong without the matching anchor, so add it
+    const want = `anchor ${rel.win.exe}`;
+    if (!$('src').value.includes(want)) line = want + '\n' + line;
+    if (!rel.inside) say('warning: that point is outside the chosen window', 'err');
+  }
   const t = $('src'), at = t.selectionStart;
   const before = t.value.slice(0, at);
   const prefix = (before === '' || before.endsWith('\n')) ? '' : '\n';
@@ -655,6 +705,10 @@ async function loadWindows() {
   try {
     const d = await api('/api/windows');
     winCache = d.windows;
+    const frame = $('frame'), keepFrame = frame.value;
+    frame.innerHTML = '<option value="">screen (absolute)</option>' +
+      d.windows.map(w => `<option value="${w.id}">${esc(w.exe)} — ${esc(w.title)}</option>`).join('');
+    frame.value = keepFrame;
     sel.innerHTML = '<option value="">— none (use countdown) —</option>' +
       d.windows.map(w => `<option value="${w.id}">${esc(w.exe)} — ${esc(w.title)}</option>`).join('');
     sel.value = keep;
