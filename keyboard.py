@@ -203,7 +203,11 @@ class Keyboard(HidDevice):
         mods, key = parse_combo(combo)
         if mods:
             self._emit(mods)
-            time.sleep(self.mod_delay)
+            # A modifier-only combo (a game skill bound to shift, say) is the
+            # press itself, so any requested hold has to apply here. Holding
+            # for only mod_delay can fall between two of the host's input
+            # polls and be missed entirely.
+            time.sleep(self.mod_delay if key else (hold or self.press_delay))
         if key:
             self._emit(mods, [key])
             time.sleep(hold or self.press_delay)

@@ -171,6 +171,11 @@ blocks it outright, so `focus` fails on anything running as administrator. Run
 the agent as administrator too - or skip the API entirely and click the window
 with the HID mouse, which is real hardware input and always allowed.
 
+**A 12ms keypress can be invisible to a game.** Text fields are event-driven
+and see everything, but a game polling input once a frame can miss a press
+shorter than ~17ms. `key shift` holds for 12ms by default; `key shift 60`
+holds for 60ms, which every frame will catch.
+
 **Under-volting corrupts SD cards.** A PC USB port cannot run a Pi 4. Check
 `vcgencmd get_throttled` — anything but `0x0` means fix your power first.
 

@@ -222,7 +222,7 @@ key enter"></textarea>
       <summary>Command reference</summary>
       <table>
         <tr><td><code>type &lt;text&gt;</code></td><td>Type literal text</td></tr>
-        <tr><td><code>key &lt;combo&gt; [ms]</code></td><td>Tap a combo, e.g. <code>ctrl+alt+delete</code>, <code>f5</code>, <code>up</code></td></tr>
+        <tr><td><code>key &lt;combo&gt; [ms]</code></td><td>Tap a combo, e.g. <code>ctrl+alt+delete</code>, <code>f5</code>. The <code>ms</code> is how long it is held — games polling at 60fps can miss the 12ms default, so use <code>key shift 60</code></td></tr>
         <tr><td><code>paste &lt;text&gt;</code></td><td>Clipboard + Ctrl+V. Instant, and types anything — emoji, —, accents (needs agent)</td></tr>
         <tr><td><code>clip &lt;var&gt;</code></td><td>Read the PC clipboard into a variable (needs agent)</td></tr>
         <tr><td><code>waitfor window &lt;t&gt; [ms]</code></td><td>Block until that window is focused — better than guessing a delay</td></tr>
