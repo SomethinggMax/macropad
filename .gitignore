@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.agent-host
+macros/*.macro
+!macros/demo.macro
+!macros/variables-demo.macro
+!macros/hold-demo.macro

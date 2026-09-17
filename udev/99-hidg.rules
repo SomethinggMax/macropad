@@ -1,0 +1,1 @@
+KERNEL=="hidg[0-9]*", GROUP="hidgadget", MODE="0660"

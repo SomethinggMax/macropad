@@ -1,0 +1,17 @@
+[Unit]
+Description=Macro keyboard web UI
+After=network-online.target usb-gadget.service
+Wants=usb-gadget.service
+
+[Service]
+Type=simple
+User=max
+Group=max
+SupplementaryGroups=hidgadget
+WorkingDirectory=/home/max/macropad
+ExecStart=/usr/bin/python3 /home/max/macropad/app.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

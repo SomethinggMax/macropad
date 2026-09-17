@@ -1,0 +1,13 @@
+[Unit]
+Description=USB HID gadget (keyboard emulation over USB-C)
+After=sys-kernel-config.mount local-fs.target
+Wants=sys-kernel-config.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/usb-hid-gadget.sh
+ExecStop=/bin/sh -c 'echo "" > /sys/kernel/config/usb_gadget/g1/UDC || true'
+
+[Install]
+WantedBy=sysinit.target

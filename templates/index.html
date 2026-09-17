@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi Macro Keyboard</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f26; --edge: #2c313b; --ink: #e5e8ee;
+    --dim: #8b93a3; --accent: #6ea8fe; --ok: #4ade80; --bad: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+           background: var(--panel); border-bottom: 1px solid var(--edge); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .pill { margin-left: auto; font-size: 12px; padding: 4px 10px; border-radius: 999px;
+          border: 1px solid var(--edge); color: var(--dim); }
+  .pill.on { color: var(--ok); border-color: #2c5138; }
+  .pill.off { color: var(--bad); border-color: #5a2b2b; }
+  main { display: grid; grid-template-columns: 210px 1fr; gap: 16px; padding: 16px;
+         align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
+           padding: 12px; }
+  .list { display: flex; flex-direction: column; gap: 4px; }
+  .list button { text-align: left; background: none; border: 0; color: var(--ink);
+                 padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .list button:hover { background: #262b34; }
+  .list button.sel { background: #2b3546; color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input, select, textarea { background: #12141a; color: var(--ink);
+    border: 1px solid var(--edge); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+  textarea { width: 100%; min-height: 300px; resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.55; }
+  button.act { background: #252b36; color: var(--ink); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 13px; }
+  button.act:hover { border-color: #46506380; background: #2c333f; }
+  button.act:disabled { opacity: .45; cursor: not-allowed; }
+  button.go { background: #1d4ed8; border-color: #1d4ed8; }
+  button.go:hover { background: #2563eb; }
+  button.danger:hover { color: var(--bad); border-color: #5a2b2b; }
+  button.stop { background: #7f1d1d; border-color: #7f1d1d; color: #fee2e2;
+                font-weight: 600; }
+  button.stop:hover { background: #991b1b; border-color: #b91c1c; }
+  .editor { position: relative; }
+  .editor .hl, .editor textarea {
+    margin: 0; width: 100%; border: 1px solid var(--edge); border-radius: 6px;
+    padding: 8px 10px; white-space: pre; overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px; line-height: 1.55; }
+  .editor .hl { position: absolute; inset: 0; background: #12141a;
+                color: var(--ink); pointer-events: none; z-index: 0; }
+  .editor textarea { position: relative; z-index: 1; display: block;
+    background: transparent; color: transparent; caret-color: var(--ink);
+    min-height: 300px; resize: vertical; }
+  .editor textarea::selection { background: #2f4a73; color: transparent; }
+  .c-cmd { color: #6ea8fe; font-weight: 600; }
+  .c-num { color: #fbbf24; }
+  .c-key { color: #4ade80; }
+  .c-lbl { color: #e879f9; }
+  .c-str { color: #cbd5e1; }
+  .c-cmt { color: #6b7280; font-style: italic; }
+  .c-op  { color: #94a3b8; }
+  .c-kw  { color: #c084fc; font-weight: 600; }
+  .c-var { color: #f0abfc; }
+  .c-win { color: #5eead4; }
+  .ac { position: absolute; z-index: 5; background: #1b2028; border: 1px solid #39414f;
+        border-radius: 6px; box-shadow: 0 8px 24px #0009; max-height: 210px;
+        overflow: auto; min-width: 260px; font-size: 12.5px;
+        font-family: ui-monospace, Menlo, monospace; }
+  .ac div { padding: 5px 10px; cursor: pointer; white-space: nowrap; color: var(--ink); }
+  .ac div small { color: var(--dim); margin-left: 8px; }
+  .ac div.sel { background: #2b3546; color: var(--accent); }
+  .cat { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 12px; }
+  .cat button { background: #12141a; border: 1px solid var(--edge); color: var(--ink);
+    border-radius: 5px; padding: 3px 8px; cursor: pointer; font-size: 12px;
+    font-family: ui-monospace, Menlo, monospace; }
+  .cat button:hover { border-color: var(--accent); color: var(--accent); }
+  .cat button.mod { border-color: #3d5a80; color: #9ec5fe; }
+  .picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+             margin-top: 10px; padding: 10px; border: 1px solid var(--edge);
+             border-radius: 8px; background: #171a21; }
+  .swatch { width: 34px; height: 34px; border-radius: 6px; border: 1px solid #4b5563;
+            background: #000; flex: none; }
+  .readout { font-family: ui-monospace, Menlo, monospace; font-size: 13px;
+             min-width: 190px; color: var(--ink); }
+  .readout small { color: var(--dim); display: block; font-size: 11px; }
+  .cath { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+          color: var(--dim); margin-top: 10px; }
+  .c-set { color: #38bdf8; font-style: italic; }
+  .c-bad { color: #f87171; text-decoration: underline wavy #f8717166; }
+  .runview { margin: 0; width: 100%; min-height: 300px; max-height: 60vh;
+    overflow: auto; background: #12141a; border: 1px solid var(--edge);
+    border-radius: 6px; padding: 8px 10px; white-space: pre;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px; line-height: 1.55; color: var(--ink); }
+  .runview .ln { padding: 0 6px; border-radius: 3px;
+                 border-left: 3px solid transparent; }
+  .runview .ln.active { background: #1d3a5f; border-left-color: var(--accent);
+                        color: #fff; }
+  .runview .num { display: inline-block; width: 2.5ch; margin-right: 12px;
+                  color: #5b6373; user-select: none; text-align: right; }
+  .log { margin-top: 12px; font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+         white-space: pre-wrap; max-height: 220px; overflow: auto; color: var(--dim); }
+  .log .err { color: var(--bad); } .log .ok { color: var(--ok); }
+  .note { font-size: 12px; color: var(--warn); }
+  details { margin-top: 12px; font-size: 12.5px; color: var(--dim); }
+  summary { cursor: pointer; color: var(--accent); }
+  code { background: #12141a; padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+  table { border-collapse: collapse; margin-top: 8px; }
+  td { padding: 3px 14px 3px 0; vertical-align: top; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+       color: var(--dim); margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pi Macro Keyboard</h1>
+  <span id="status" class="pill">checking…</span>
+</header>
+
+<main>
+  <div class="panel">
+    <h2>Macros</h2>
+    <div id="list" class="list"></div>
+    <button class="act" style="margin-top:10px;width:100%" onclick="newMacro()">+ New</button>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <input id="name" placeholder="macro name" style="flex:1;min-width:160px">
+      <button class="act" onclick="save()">Save</button>
+      <button class="act" onclick="check()">Check</button>
+      <button class="act danger" onclick="del()">Delete</button>
+    </div>
+    <div class="editor" id="editor">
+      <pre id="hl" class="hl" aria-hidden="true"></pre>
+      <textarea id="src" spellcheck="false" wrap="off" placeholder="type hello world
+delay 200
+key enter"></textarea>
+      <div id="ac" class="ac" hidden></div>
+    </div>
+    <pre id="runview" class="runview" hidden></pre>
+    <div class="row" style="margin-top:10px">
+      <label style="color:var(--dim)">Window
+        <select id="target" style="max-width:230px" title="focus this window before running">
+          <option value="">— none (use countdown) —</option>
+        </select>
+      </label>
+      <button class="act" onclick="loadWindows()" title="refresh window list">⟳</button>
+      <label style="color:var(--dim)">Start after
+        <input id="delay" type="number" value="5" min="0" max="300" step="0.5"
+               style="width:78px" title="seconds before the macro fires (0-300)"> s
+      </label>
+      <button id="runbtn" class="act go" onclick="fire()">Run on PC</button>
+      <button id="stopbtn" class="act stop" onclick="stopNow()">■ STOP</button>
+      <span class="note">Keystrokes go to whatever window has focus — switch to your target window during the countdown.</span>
+    </div>
+    <div id="log" class="log"></div>
+
+    <div class="picker">
+      <div id="swatch" class="swatch"></div>
+      <div id="readout" class="readout">—<small>move your mouse on the PC</small></div>
+      <button id="livebtn" class="act" onclick="toggleLive()">▶ Live</button>
+      <button class="act" onclick="captureSoon()">◉ Capture in 3s</button>
+      <button class="act" onclick="insertProbe('getpixel')">+ getpixel</button>
+      <button class="act" onclick="insertProbe('waitfor')">+ waitfor pixel</button>
+      <button class="act" onclick="insertProbe('moveto')">+ moveto</button>
+    </div>
+
+    <details>
+      <summary>Key catalogue</summary>
+      <div id="catalogue"></div>
+    </details>
+
+    <details>
+      <summary>Command reference</summary>
+      <table>
+        <tr><td><code>type &lt;text&gt;</code></td><td>Type literal text</td></tr>
+        <tr><td><code>key &lt;combo&gt; [ms]</code></td><td>Tap a combo, e.g. <code>ctrl+alt+delete</code>, <code>f5</code>, <code>up</code></td></tr>
+        <tr><td><code>paste &lt;text&gt;</code></td><td>Clipboard + Ctrl+V. Instant, and types anything — emoji, —, accents (needs agent)</td></tr>
+        <tr><td><code>clip &lt;var&gt;</code></td><td>Read the PC clipboard into a variable (needs agent)</td></tr>
+        <tr><td><code>waitfor window &lt;t&gt; [ms]</code></td><td>Block until that window is focused — better than guessing a delay</td></tr>
+        <tr><td><code>waitfor pixel &lt;x&gt; &lt;y&gt; &lt;#rrggbb&gt; [ms]</code></td><td>Block until a pixel turns that colour</td></tr>
+        <tr><td><code>getpixel &lt;x&gt; &lt;y&gt; &lt;var&gt;</code></td><td>Read a pixel colour into a variable</td></tr>
+        <tr><td><code>jumpif &lt;var&gt; &lt;op&gt; &lt;val&gt; &lt;label&gt;</code></td><td>Branch: <code>jumpif i &lt; 5 loop</code>. Ops: <code>&lt; &lt;= &gt; &gt;= == != contains</code></td></tr>
+        <tr><td><code>moveto &lt;x&gt; &lt;y&gt;</code></td><td>Move the mouse to an absolute pixel position</td></tr>
+        <tr><td><code>move &lt;dx&gt; &lt;dy&gt;</code></td><td>Move relative to the last position</td></tr>
+        <tr><td><code>click [button] [n]</code></td><td><code>click</code>, <code>click right</code>, <code>click left 2</code></td></tr>
+        <tr><td><code>mousedown/mouseup</code></td><td>Hold a button (drag): <code>mousedown left</code> … <code>mouseup</code></td></tr>
+        <tr><td><code>scroll &lt;n&gt;</code></td><td>Wheel; positive up, negative down</td></tr>
+        <tr><td><code>screen &lt;w&gt; &lt;h&gt;</code></td><td>Tell the Pi your resolution (default 1920x1080)</td></tr>
+        <tr><td><code>focus &lt;window&gt;</code></td><td>Switch to a window by title or exe (needs the PC agent): <code>focus Notepad</code></td></tr>
+        <tr><td><code>set &lt;name&gt; &lt;value&gt;</code></td><td>Define a variable: <code>set n 3</code>, <code>set who Max</code></td></tr>
+        <tr><td><code>add &lt;name&gt; &lt;n&gt;</code></td><td>Add to a number (negative to subtract); unset starts at 0</td></tr>
+        <tr><td><code>$name</code></td><td>Use a variable anywhere: <code>type hi $who</code>, <code>repeat $n</code>, <code>delay $w</code>. <code>$$</code> is a literal $</td></tr>
+        <tr><td><code>hold &lt;combo&gt;</code></td><td>Press and hold (key down) — stays down until released</td></tr>
+        <tr><td><code>release [combo]</code></td><td>Key up: release that combo, or everything if omitted</td></tr>
+        <tr><td><code>delay &lt;ms&gt;</code></td><td>Wait, e.g. <code>delay 250</code></td></tr>
+        <tr><td><code>delay &lt;a&gt;-&lt;b&gt;</code></td><td>Random wait, e.g. <code>delay 100-400</code></td></tr>
+        <tr><td><code>repeat &lt;n&gt;</code> … <code>end</code></td><td>Loop n times (or <code>repeat forever</code>)</td></tr>
+        <tr><td><code>label &lt;name&gt;</code></td><td>Mark a position</td></tr>
+        <tr><td><code>goto &lt;name&gt;</code></td><td>Jump to a label</td></tr>
+        <tr><td><code>chance &lt;pct&gt; &lt;cmd&gt;</code></td><td>Run cmd n% of the time</td></tr>
+        <tr><td><code>oneof a|b|c</code></td><td>Type one option at random</td></tr>
+        <tr><td><code># comment</code></td><td>Ignored</td></tr>
+      </table>
+    </details>
+  </div>
+</main>
+
+<script>
+let current = null, busy = false, aborted = false;
+const $ = id => document.getElementById(id);
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  return d;
+}
+function say(msg, cls = '') { $('log').innerHTML = `<span class="${cls}">${msg}</span>`; }
+
+async function poll() {
+  try {
+    const d = await api('/api/status');
+    $('status').textContent = d.connected ? 'PC connected' : `not connected (${d.state})`;
+    $('status').className = 'pill ' + (d.connected ? 'on' : 'off');
+  } catch { $('status').textContent = 'pi unreachable'; $('status').className = 'pill off'; }
+}
+
+async function refresh() {
+  const { macros } = await api('/api/macros');
+  $('list').innerHTML = '';
+  macros.forEach(n => {
+    const b = document.createElement('button');
+    b.textContent = n;
+    b.className = n === current ? 'sel' : '';
+    b.onclick = () => load(n);
+    $('list').appendChild(b);
+  });
+}
+async function load(n) {
+  const d = await api('/api/macros/' + encodeURIComponent(n));
+  current = n; $('name').value = n; $('src').value = d.source; paint();
+  say('loaded ' + n); refresh();
+}
+function newMacro() { current = null; $('name').value = ''; $('src').value = ''; paint(); refresh(); say('new macro'); }
+
+async function save() {
+  const n = $('name').value.trim();
+  if (!n) return say('name required', 'err');
+  try {
+    await api('/api/macros/' + encodeURIComponent(n),
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: $('src').value }) });
+    current = n; say('saved ' + n, 'ok'); refresh();
+  } catch (e) { say(e.message, 'err'); }
+}
+async function del() {
+  const n = $('name').value.trim();
+  if (!n || !confirm('Delete ' + n + '?')) return;
+  await api('/api/macros/' + encodeURIComponent(n), { method: 'DELETE' });
+  newMacro(); say('deleted ' + n, 'ok');
+}
+async function check() {
+  try {
+    const d = await api('/api/check', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: $('src').value }) });
+    say('dry run — nothing sent to the PC:\n' + d.log.join('\n'), 'ok');
+  } catch (e) { say(e.message, 'err'); }
+}
+const COMMANDS = ['type','key','hold','release','delay','label','goto',
+                  'repeat','end','chance','oneof','set','add','focus',
+                  'jumpif','moveto','move','click','mousedown','mouseup',
+                  'scroll','screen','paste','clip','getpixel','waitfor'];
+const NOARG = ['end','release'];
+
+function vars(escaped) {
+  return escaped.replace(/\$(\$|[A-Za-z_][A-Za-z0-9_]*)/g,
+    (m, n) => n === '$' ? m : `<span class="c-var">${m}</span>`);
+}
+function num(s) {
+  // single pass: a second replace would corrupt the class names written by the first
+  return esc(s).replace(/(\d+)|(-)/g, (m, d) => d
+    ? `<span class="c-num">${d}</span>` : '<span class="c-op">-</span>');
+}
+function combo(s) {
+  return esc(s).split('+').map(p => `<span class="c-key">${p}</span>`)
+               .join('<span class="c-op">+</span>');
+}
+
+function hlLine(raw) {
+  const lead = raw.match(/^[ \t]*/)[0];
+  const body = raw.slice(lead.length);
+  if (!body.trim()) return esc(raw) || ' ';
+  // whole-line comments only - '#' stays literal inside a type
+  if (body.startsWith('#')) return `<span class="c-cmt">${esc(raw)}</span>`;
+
+  const m = body.match(/^(\S+)([ \t]*)([\s\S]*)$/);
+  const cmd = m[1], gap = m[2], rest = m[3], lc = cmd.toLowerCase();
+  if (COMMANDS.indexOf(lc) < 0)
+    return esc(lead) + `<span class="c-bad">${esc(cmd)}</span>` + esc(gap + rest);
+
+  let body2;
+  if (lc === 'type') {
+    body2 = `<span class="c-str">${esc(rest)}</span>`;
+  } else if (lc === 'oneof') {
+    body2 = esc(rest).split('|')
+      .map(x => `<span class="c-str">${x}</span>`)
+      .join('<span class="c-op">|</span>');
+  } else if (lc === 'delay') {
+    body2 = num(rest);
+  } else if (lc === 'jumpif') {
+    const q = rest.split(/([ \t]+)/);
+    body2 = q.map((x, i) => i === 0 ? `<span class="c-set">${esc(x)}</span>`
+      : i === q.length - 1 ? `<span class="c-lbl">${esc(x)}</span>`
+      : (/^[ \t]+$/.test(x) ? x
+         : (/^[<>=!]+$|^contains$/.test(x) ? `<span class="c-op">${esc(x)}</span>` : num(x)))).join('');
+  } else if (lc === 'moveto' || lc === 'move' || lc === 'scroll' || lc === 'screen') {
+    body2 = num(rest);
+  } else if (lc === 'click' || lc === 'mousedown' || lc === 'mouseup') {
+    const q = rest.split(/([ \t]+)/);
+    body2 = q.map((x, i) => i === 0 ? `<span class="c-key">${esc(x)}</span>`
+      : (/^[ \t]+$/.test(x) ? x : num(x))).join('');
+  } else if (lc === 'paste') {
+    body2 = `<span class="c-str">${esc(rest)}</span>`;
+  } else if (lc === 'clip') {
+    body2 = `<span class="c-set">${esc(rest)}</span>`;
+  } else if (lc === 'getpixel') {
+    const q = rest.split(/([ \t]+)/);
+    body2 = q.map((x, i) => i === q.length - 1 ? `<span class="c-set">${esc(x)}</span>`
+      : (/^[ \t]+$/.test(x) ? x : num(x))).join('');
+  } else if (lc === 'waitfor') {
+    const q = rest.split(/([ \t]+)/);
+    body2 = q.map((x, i) => i === 0 ? `<span class="c-kw">${esc(x)}</span>`
+      : (/^[ \t]+$/.test(x) ? x
+         : (/^#[0-9a-fA-F]{6}$/.test(x) ? `<span class="c-key">${esc(x)}</span>`
+            : (/^\d+$/.test(x) ? num(x) : `<span class="c-win">${esc(x)}</span>`)))).join('');
+  } else if (lc === 'focus') {
+    body2 = `<span class="c-win">${esc(rest)}</span>`;
+  } else if (lc === 'label' || lc === 'goto') {
+    body2 = `<span class="c-lbl">${esc(rest)}</span>`;
+  } else if (lc === 'repeat') {
+    body2 = /^forever\b/i.test(rest) ? `<span class="c-kw">${esc(rest)}</span>` : num(rest);
+  } else if (lc === 'key' || lc === 'hold' || lc === 'release') {
+    const parts = rest.split(/([ \t]+)/);
+    body2 = parts.map((p, i) => i === 0 ? combo(p) : (/^[ \t]+$/.test(p) ? p : num(p))).join('');
+  } else if (lc === 'set' || lc === 'add') {
+    const mm = rest.match(/^(\S+)([ \t]*)([\s\S]*)$/);
+    body2 = mm ? `<span class="c-set">${esc(mm[1])}</span>${mm[2]}` +
+                 (lc === 'add' ? num(mm[3]) : `<span class="c-str">${esc(mm[3])}</span>`)
+               : esc(rest);
+  } else if (lc === 'chance') {
+    const mm = rest.match(/^(\d+)([ \t]*)([\s\S]*)$/);
+    body2 = mm ? `<span class="c-num">${mm[1]}</span>${mm[2]}${hlLine(mm[3])}` : num(rest);
+  } else {
+    body2 = esc(rest);
+  }
+  return esc(lead) + `<span class="c-cmd">${esc(cmd)}</span>` + esc(gap) + vars(body2);
+}
+
+function paint() {
+  const t = $('src').value;
+  $('hl').innerHTML = t.split('\n').map(hlLine).join('\n') + '\n';
+  $('hl').scrollTop = $('src').scrollTop;
+  $('hl').scrollLeft = $('src').scrollLeft;
+}
+
+function esc(s) {
+  return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+function showRunView(text) {
+  const pre = $('runview');
+  pre.innerHTML = text.split('\n').map((t, i) =>
+    `<div class="ln" data-line="${i + 1}"><span class="num">${i + 1}</span>${hlLine(t)}</div>`
+  ).join('');
+  $('editor').hidden = true; pre.hidden = false;
+}
+function hideRunView() { $('runview').hidden = true; $('editor').hidden = false; }
+function highlight(line) {
+  const prev = $('runview').querySelector('.ln.active');
+  if (prev) prev.classList.remove('active');
+  if (!line) return;
+  const el = $('runview').querySelector(`.ln[data-line="${line}"]`);
+  if (el) { el.classList.add('active'); el.scrollIntoView({ block: 'nearest' }); }
+}
+let progTimer = null;
+function startProgress() {
+  progTimer = setInterval(async () => {
+    try { const p = await api('/api/progress'); if (p.running) highlight(p.line); }
+    catch {}
+  }, 80);
+}
+function stopProgress() { clearInterval(progTimer); progTimer = null; highlight(null); }
+
+let winCache = [], keyCache = [], acItems = [], acIndex = 0, acPartial = '';
+
+let liveTimer = null, probed = null;
+
+function showProbe(p, note) {
+  probed = p;
+  $('swatch').style.background = p.colour;
+  $('readout').innerHTML = `${p.x}, ${p.y}  ${p.colour}<small>${note}</small>`;
+}
+
+async function sampleProbe(note) {
+  try {
+    const p = await api('/api/probe');
+    showProbe(p, note);
+    return p;
+  } catch (e) {
+    $('readout').innerHTML = `—<small>${esc(e.message).slice(0, 60)}</small>`;
+    stopLive();
+    return null;
+  }
+}
+
+function stopLive() {
+  if (liveTimer) clearInterval(liveTimer);
+  liveTimer = null;
+  $('livebtn').textContent = '▶ Live';
+}
+
+function toggleLive() {
+  if (liveTimer) return stopLive();
+  $('livebtn').textContent = '⏸ Stop';
+  sampleProbe('live');
+  liveTimer = setInterval(() => sampleProbe('live'), 250);
+}
+
+async function captureSoon() {
+  stopLive();
+  // A countdown, because clicking a button here would move the pointer away
+  // from whatever you are trying to sample.
+  for (let t = 3; t > 0; t--) {
+    $('readout').innerHTML = `—<small>point at the target… ${t}</small>`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  const p = await sampleProbe('captured');
+  if (p) say(`captured ${p.x},${p.y} ${p.colour}`, 'ok');
+}
+
+function insertProbe(kind) {
+  if (!probed) return say('nothing captured yet — hit Capture first', 'err');
+  const { x, y, colour } = probed;
+  const line = kind === 'getpixel' ? `getpixel ${x} ${y} col`
+             : kind === 'waitfor'  ? `waitfor pixel ${x} ${y} ${colour} 10000`
+             : `moveto ${x} ${y}`;
+  const t = $('src'), at = t.selectionStart;
+  const before = t.value.slice(0, at);
+  const prefix = (before === '' || before.endsWith('\n')) ? '' : '\n';
+  t.value = before + prefix + line + '\n' + t.value.slice(t.selectionEnd);
+  const caret = at + prefix.length + line.length + 1;
+  t.setSelectionRange(caret, caret); t.focus(); paint();
+}
+
+async function loadKeys() {
+  try {
+    const d = await api('/api/keys');
+    keyCache = d.groups;
+    $('catalogue').innerHTML = d.groups.map(g =>
+      `<div class="cath">${esc(g.title)}</div><div class="cat">` +
+      g.keys.map(k => {
+        const alias = k.aliases.length ? ' = ' + k.aliases.join(', ') : '';
+        return `<button class="${k.modifier ? 'mod' : ''}" title="${esc(k.name + alias)}"
+                 onclick="insertKey('${k.name}')">${esc(k.name)}</button>`;
+      }).join('') + '</div>').join('');
+  } catch (e) { $('catalogue').textContent = 'could not load key list'; }
+}
+
+function insertKey(name) {
+  const t = $('src'), p = t.selectionStart;
+  t.value = t.value.slice(0, p) + name + t.value.slice(t.selectionEnd);
+  const c = p + name.length;
+  t.setSelectionRange(c, c); t.focus(); paint();
+}
+
+function charWidth() {
+  if (charWidth.w) return charWidth.w;
+  const s = document.createElement('span');
+  s.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;' +
+    'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px';
+  s.textContent = '0'.repeat(50);
+  document.body.appendChild(s);
+  charWidth.w = s.getBoundingClientRect().width / 50;
+  s.remove();
+  return charWidth.w;
+}
+
+function acContext() {
+  const t = $('src');
+  if (t.selectionStart !== t.selectionEnd) return null;
+  const before = t.value.slice(0, t.selectionStart);
+  const line = before.slice(before.lastIndexOf('\n') + 1);
+  let m = line.match(/^[ \t]*focus[ \t]+(.*)$/i);
+  if (m) return { kind: 'window', partial: m[1] };
+  m = line.match(/^[ \t]*(?:key|hold|release)[ \t]+(\S*)$/i);
+  if (m) {
+    const plus = m[1].lastIndexOf('+');
+    return { kind: 'key', partial: plus >= 0 ? m[1].slice(plus + 1) : m[1] };
+  }
+  return null;
+}
+
+function acSuggest(ctx) {
+  const q = ctx.partial.toLowerCase();
+  if (ctx.kind === 'window') {
+    return winCache
+      .filter(w => !q || (w.title + ' ' + w.exe).toLowerCase().includes(q))
+      .slice(0, 8)
+      .map(w => ({ label: w.title, note: w.exe, insert: w.title }));
+  }
+  const out = [];
+  for (const g of keyCache) for (const k of g.keys) {
+    if ([k.name, ...k.aliases].some(n => n.startsWith(q)))
+      out.push({ label: k.name, note: g.title.toLowerCase(), insert: k.name });
+  }
+  return out.slice(0, 8);
+}
+
+function renderAC() {
+  $('ac').innerHTML = acItems.map((it, i) =>
+    `<div class="${i === acIndex ? 'sel' : ''}" onmousedown="event.preventDefault();acAccept(${i})">` +
+    `${esc(it.label)}<small>${esc(it.note)}</small></div>`).join('');
+}
+
+function hideAC() { $('ac').hidden = true; acItems = []; }
+
+function updateAC() {
+  const ctx = acContext();
+  if (!ctx) return hideAC();
+  acItems = acSuggest(ctx);
+  if (!acItems.length) return hideAC();
+  acPartial = ctx.partial; acIndex = 0;
+  const t = $('src'), cs = getComputedStyle(t);
+  const before = t.value.slice(0, t.selectionStart);
+  const row = before.split('\n').length - 1;
+  const col = before.length - before.lastIndexOf('\n') - 1;
+  const lh = parseFloat(cs.lineHeight) || 20;
+  const ac = $('ac');
+  ac.hidden = false;
+  ac.style.top = (parseFloat(cs.paddingTop) + (row + 1) * lh - t.scrollTop + 2) + 'px';
+  ac.style.left = Math.min(
+    Math.max(0, parseFloat(cs.paddingLeft) + col * charWidth() - t.scrollLeft),
+    Math.max(0, t.clientWidth - 260)) + 'px';
+  renderAC();
+}
+
+function acAccept(i) {
+  const item = acItems[i === undefined ? acIndex : i];
+  if (!item) return;
+  const t = $('src'), pos = t.selectionStart, start = pos - acPartial.length;
+  t.value = t.value.slice(0, start) + item.insert + t.value.slice(pos);
+  const caret = start + item.insert.length;
+  hideAC(); t.setSelectionRange(caret, caret); t.focus(); paint();
+}
+
+async function loadWindows() {
+  const sel = $('target'), keep = sel.value;
+  try {
+    const d = await api('/api/windows');
+    winCache = d.windows;
+    sel.innerHTML = '<option value="">— none (use countdown) —</option>' +
+      d.windows.map(w => `<option value="${w.id}">${esc(w.exe)} — ${esc(w.title)}</option>`).join('');
+    sel.value = keep;
+    if (!d.windows.length) say('agent reachable but reported no windows');
+  } catch (e) {
+    sel.innerHTML = '<option value="">— agent not running —</option>';
+    say(e.message, 'err');
+  }
+}
+
+async function fire() {
+  if (busy) return;
+  const picked = $('target').value;
+  const wait = picked ? 0
+    : Math.max(0, Math.min(300, parseFloat($('delay').value) || 0));
+  busy = true; aborted = false; $('runbtn').disabled = true;
+  showRunView($('src').value);
+  const req = api('/api/run', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: $('src').value, delay: wait,
+                           target: $('target').value || null }) });
+  let left = wait;
+  while (left > 0 && !aborted) {
+    say(`firing in ${left.toFixed(left % 1 ? 1 : 0)}s — focus your target window…`);
+    await new Promise(r => setTimeout(r, Math.min(1000, left * 1000)));
+    left = Math.max(0, left - 1);
+  }
+  if (!aborted) say('running…');
+  startProgress();
+  try {
+    const d = await req;
+    if (d.stopped) say('STOPPED\n' + (d.log || []).join('\n'), 'err');
+    else say('done:\n' + d.log.join('\n'), 'ok');
+  } catch (e) { say(e.message, 'err'); }
+  stopProgress(); hideRunView();
+  busy = false; $('runbtn').disabled = false;
+}
+
+async function stopNow() {
+  aborted = true;
+  try {
+    const d = await api('/api/stop', { method: 'POST' });
+    say(d.released ? 'STOPPED — nothing was running, released any held keys'
+                   : 'STOP sent — aborting macro', 'err');
+  } catch (e) { say('stop failed: ' + e.message, 'err'); }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { e.preventDefault(); stopNow(); }
+});
+
+$('src').addEventListener('input', () => { paint(); updateAC(); });
+$('src').addEventListener('blur', hideAC);
+$('src').addEventListener('keydown', e => {
+  if ($('ac').hidden) return;
+  if (e.key === 'ArrowDown') { acIndex = (acIndex + 1) % acItems.length; renderAC(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { acIndex = (acIndex - 1 + acItems.length) % acItems.length; renderAC(); e.preventDefault(); }
+  else if (e.key === 'Enter' || e.key === 'Tab') { acAccept(); e.preventDefault(); }
+  else if (e.key === 'Escape') { hideAC(); e.preventDefault(); e.stopPropagation(); }
+});
+$('src').addEventListener('scroll', () => {
+  $('hl').scrollTop = $('src').scrollTop; $('hl').scrollLeft = $('src').scrollLeft;
+});
+poll(); setInterval(poll, 3000); refresh(); paint(); loadWindows(); loadKeys();
+</script>
+</body>
+</html>

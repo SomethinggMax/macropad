@@ -1,0 +1,9 @@
+set name Max
+set n 3
+
+repeat $n
+  type hello $name
+  key enter
+  add n 1
+end
+type done, n is now $n
