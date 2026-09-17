@@ -210,6 +210,7 @@ key enter"></textarea>
         <tr><td><code>mousedown/mouseup</code></td><td>Hold a button (drag): <code>mousedown left</code> … <code>mouseup</code></td></tr>
         <tr><td><code>scroll &lt;n&gt;</code></td><td>Wheel; positive up, negative down</td></tr>
         <tr><td><code>screen &lt;w&gt; &lt;h&gt;</code></td><td>Tell the Pi your resolution (default 1920x1080)</td></tr>
+        <tr><td><code>stop [reason]</code></td><td>End the macro here, cleanly. Optional reason shows in the log</td></tr>
         <tr><td><code>limit none</code></td><td>Run until STOP is pressed. Without it a macro is capped at 300s</td></tr>
         <tr><td><code>limit &lt;seconds&gt;</code></td><td>Set your own runtime cap</td></tr>
         <tr><td><code>anchor &lt;window&gt;</code></td><td>Make following x/y relative to that window's client area; <code>anchor none</code> to reset</td></tr>
@@ -302,7 +303,7 @@ async function check() {
 const COMMANDS = ['type','key','hold','release','delay','label','goto',
                   'repeat','end','chance','oneof','set','add','focus',
                   'jumpif','moveto','move','click','mousedown','mouseup',
-                  'scroll','screen','paste','clip','getpixel','waitfor','anchor','limit'];
+                  'scroll','screen','paste','clip','getpixel','waitfor','anchor','limit','stop'];
 const NOARG = ['end','release'];
 
 function vars(escaped) {
@@ -375,6 +376,8 @@ function hlLine(raw) {
          : (HEX.test(x) ? `<span class="c-hex">${esc(x)}</span>`
             : (OPERATOR.test(x) ? `<span class="c-op">${esc(x)}</span>`
                : (/^\d+$/.test(x) ? num(x) : `<span class="c-win">${esc(x)}</span>`))))).join('');
+  } else if (lc === 'stop') {
+    body2 = `<span class="c-str">${esc(rest)}</span>`;
   } else if (lc === 'limit') {
     body2 = /^(none|off|unlimited)$/i.test(rest)
       ? `<span class="c-kw">${esc(rest)}</span>` : num(rest);

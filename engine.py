@@ -160,6 +160,8 @@ def parse(source):
             if len(parts) > 2:
                 raise MacroError(f"line {lineno}: 'click' takes <button> <count>")
             instrs.append(Instruction("click", [button, count], lineno))
+        elif op == "stop":
+            instrs.append(Instruction("stop", [remainder.strip() or None], lineno))
         elif op == "limit":
             if rest.lower() in ("none", "off", "unlimited"):
                 instrs.append(Instruction("limit", [None], lineno))
@@ -424,6 +426,8 @@ def run(source, kb=None, max_steps=100_000, max_seconds=60.0, dry_run=False,
                 on_step(instr.line, instr.op)
             pc = _step(instr, pc, kb, labels, counters, log, dry_run, stop,
                        variables, table, mouse, anchor, limits)
+            if pc < 0:  # a 'stop' instruction ran; finish normally
+                break
     except MacroStopped as exc:
         exc.log = log
         raise
@@ -563,6 +567,10 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
         log.append(f"jumpif {variable}={left!r} {comparison} {right!r} -> "
                    f"{'jump to ' + target if hit else 'continue'}")
         return labels[target] if hit else pc + 1
+    if op == "stop":
+        reason = expand(args[0], variables, instr.line) if args[0] else None
+        log.append(f"stop: {reason}" if reason else "stop")
+        return -1
     if op == "limit":
         # The guard exists to catch accidental runaways; a macro that says it
         # runs until stopped is not an accident. STOP still works either way.

@@ -90,6 +90,7 @@ label top                     # labels and jumps
 jumpif n < 5 top              # < <= > >= == != contains
 
 limit none                    # run until STOP; default cap is 300s
+stop                          # end the macro here (stop <reason> to log why)
 chance 30 type maybe          # runs 30% of the time
 oneof alpha|beta|gamma        # picks one at random
 
