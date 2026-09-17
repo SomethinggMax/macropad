@@ -19,6 +19,8 @@
           border: 1px solid var(--edge); color: var(--dim); }
   .pill.on { color: var(--ok); border-color: #2c5138; }
   .pill.off { color: var(--bad); border-color: #5a2b2b; }
+  .pill.busy { color: var(--warn); border-color: #5c4a1e;
+               margin-left: auto; }
   main { display: grid; grid-template-columns: 210px 1fr; gap: 16px; padding: 16px;
          align-items: start; }
   .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
@@ -129,6 +131,7 @@
 <body>
 <header>
   <h1>Pi Macro Keyboard</h1>
+  <span id="runpill" class="pill" hidden></span>
   <span id="status" class="pill">checking…</span>
 </header>
 
@@ -222,7 +225,7 @@ key enter"></textarea>
         <tr><td><code>paste &lt;text&gt;</code></td><td>Clipboard + Ctrl+V. Instant, and types anything — emoji, —, accents (needs agent)</td></tr>
         <tr><td><code>clip &lt;var&gt;</code></td><td>Read the PC clipboard into a variable (needs agent)</td></tr>
         <tr><td><code>waitfor window &lt;t&gt; [ms]</code></td><td>Block until that window is focused — better than guessing a delay</td></tr>
-        <tr><td><code>waitfor pixel &lt;x&gt; &lt;y&gt; [near] &lt;#rrggbb&gt; [ms]</code></td><td>Block until a pixel turns that colour. <b>Use <code>near</code></b> — exact rarely matches on real screens</td></tr>
+        <tr><td><code>waitfor … [ms] [else &lt;label&gt;]</code></td><td>Block until ready. <b>Use <code>near</code></b> for colours. <code>else</code> jumps to a label on timeout instead of aborting</td></tr>
         <tr><td><code>getpixel &lt;x&gt; &lt;y&gt; &lt;var&gt;</code></td><td>Read a pixel colour into a variable</td></tr>
         <tr><td><code>jumpif &lt;var&gt; &lt;op&gt; &lt;val&gt; &lt;label&gt;</code></td><td>Branch: <code>jumpif i &lt; 5 loop</code>. Ops: <code>&lt; &lt;= &gt; &gt;= == != contains near</code>. <code>near</code> matches colours within 16 per channel</td></tr>
         <tr><td><code>moveto &lt;x&gt; &lt;y&gt;</code></td><td>Move the mouse to an absolute pixel position</td></tr>
@@ -269,6 +272,12 @@ function say(msg, cls = '') { $('log').innerHTML = `<span class="${cls}">${msg}<
 async function poll() {
   try {
     const d = await api('/api/status');
+    const rp = $('runpill');
+    if (d.running) {
+      rp.hidden = false;
+      rp.className = 'pill busy';
+      rp.textContent = `▶ running: ${d.running_macro || '?'}`;
+    } else { rp.hidden = true; }
     if (d.agent_stale) {
       $('status').textContent = `agent v${d.agent_version} is old — re-download (needs v${d.agent_wants})`;
       $('status').className = 'pill off';
@@ -276,6 +285,7 @@ async function poll() {
       $('status').textContent = d.connected ? 'PC connected' : `not connected (${d.state})`;
       $('status').className = 'pill ' + (d.connected ? 'on' : 'off');
     }
+    $('status').style.marginLeft = d.running ? '0' : 'auto';
   } catch { $('status').textContent = 'pi unreachable'; $('status').className = 'pill off'; }
 }
 
@@ -682,7 +692,8 @@ function hkFromEvent(e) {
 function renderHotkeys(registered) {
   const live = new Set((registered || []).map(r => r.combo));
   $('hklist').innerHTML = hotkeys.length ? hotkeys.map((h, i) =>
-    `<div class="hk"><code>${esc(h.combo)}</code> → ${esc(h.macro)} ` +
+    `<div class="hk"><code>${esc(h.combo)}</code> → ` +
+    `${h.action === 'stop' ? '<b style="color:var(--bad)">STOP any macro</b>' : esc(h.macro)} ` +
     `<span style="color:${live.has(h.combo) ? 'var(--ok)' : 'var(--warn)'}">` +
     `${live.has(h.combo) ? '● active' : '○ not registered'}</span> ` +
     `<button class="act danger" onclick="removeHotkey(${i})">remove</button></div>`
@@ -697,7 +708,9 @@ async function loadHotkeys() {
     $('hkstate').textContent = d.error || '';
   } catch (e) { $('hkstate').textContent = e.message; }
   const { macros } = await api('/api/macros');
-  $('hkmacro').innerHTML = macros.map(n => `<option>${esc(n)}</option>`).join('');
+  $('hkmacro').innerHTML =
+    '<option value="(stop)">■ STOP any running macro</option>' +
+    macros.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
 }
 
 async function saveHotkeys() {
@@ -711,9 +724,12 @@ async function saveHotkeys() {
 }
 
 function addHotkey() {
-  const combo = $('hkcombo').value.trim(), macro = $('hkmacro').value;
-  if (!combo || !macro) return say('press a key combination first', 'err');
-  hotkeys = hotkeys.filter(h => h.combo !== combo).concat([{ combo, macro }]);
+  const combo = $('hkcombo').value.trim(), picked = $('hkmacro').value;
+  if (!combo || !picked) return say('press a key combination first', 'err');
+  const entry = picked === '(stop)'
+    ? { combo, macro: '', action: 'stop' }
+    : { combo, macro: picked, action: '' };
+  hotkeys = hotkeys.filter(h => h.combo !== combo).concat([entry]);
   $('hkcombo').value = '';
   saveHotkeys();
 }

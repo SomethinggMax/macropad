@@ -23,7 +23,8 @@ app = Flask(__name__)
 run_lock = threading.Lock()
 stop_event = threading.Event()
 # Latest source line the runner is on, polled by the UI to highlight it.
-progress = {"line": None, "op": None, "running": False}
+progress = {"line": None, "op": None, "running": False,
+            "macro": None, "since": None}
 
 
 def macro_path(name):
@@ -54,7 +55,8 @@ def status():
             live = info.get("hotkeys")
             # self-healing: the agent forgets its hotkeys when restarted
             if wanted and live is not None and live != [
-                    {"combo": h["combo"], "macro": h["macro"]} for h in wanted]:
+                    {"combo": h["combo"], "macro": h.get("macro") or None,
+                     "action": h.get("action") or None} for h in wanted]:
                 try:
                     push_hotkeys(wanted)
                 except agent_client.AgentError:
@@ -62,6 +64,7 @@ def status():
         except agent_client.AgentError:
             found = 0
     return jsonify(state=state, connected=(state == "configured"),
+                   running=progress["running"], running_macro=progress["macro"],
                    agent_host=agent_client.get_host(),
                    agent_version=found, agent_wants=agent_client.WANT_VERSION,
                    agent_stale=bool(found and found < agent_client.WANT_VERSION))
@@ -158,14 +161,20 @@ def hotkeys():
     cleaned = []
     for item in wanted:
         combo = str(item.get("combo", "")).strip()
+        action = str(item.get("action", "")).strip()
         macro = str(item.get("macro", "")).strip()
-        if not combo or not macro:
-            return jsonify(ok=False, error="each hotkey needs a combo and a macro"), 400
+        if not combo:
+            return jsonify(ok=False, error="each hotkey needs a combo"), 400
+        if action == "stop":
+            cleaned.append({"combo": combo, "macro": "", "action": "stop"})
+            continue
+        if not macro:
+            return jsonify(ok=False, error="each hotkey needs a macro"), 400
         try:
             macro_path(macro)
         except ValueError as exc:
             return jsonify(ok=False, error=str(exc)), 400
-        cleaned.append({"combo": combo, "macro": macro})
+        cleaned.append({"combo": combo, "macro": macro, "action": ""})
 
     HOTKEY_FILE.write_text(json.dumps(cleaned, indent=2))
     try:
@@ -297,7 +306,9 @@ def run_macro():
         def track(line, op):
             progress["line"], progress["op"] = line, op
 
-        progress.update(line=None, op=None, running=True)
+        progress.update(line=None, op=None, running=True,
+                        macro=data.get("name") or "(unsaved editor macro)",
+                        since=time.time())
         log = run(source, max_steps=200_000, max_seconds=300, stop=stop_event,
                   on_step=track)
         if focused:
@@ -310,7 +321,7 @@ def run_macro():
     except NotConnectedError as exc:
         return jsonify(ok=False, error=f"connection lost: {exc}"), 409
     finally:
-        progress.update(line=None, op=None, running=False)
+        progress.update(line=None, op=None, running=False, macro=None, since=None)
         run_lock.release()
 
 

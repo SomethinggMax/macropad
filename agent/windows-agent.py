@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PORT = 8765
-VERSION = 6  # bumped whenever endpoints change, so the Pi can warn if stale
+VERSION = 7  # bumped whenever endpoints change, so the Pi can warn if stale
 DWMWA_CLOAKED = 14
 SW_RESTORE = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -478,10 +478,16 @@ class Hotkeys:
     def _fire(self, item):
         if not self._callback:
             return
-        body = json.dumps({"name": item.get("macro"), "delay": 0,
-                           "hotkey": True}).encode()
+        # a panic hotkey goes straight to the stop endpoint, so it works no
+        # matter which macro is running - or if none is
+        if item.get("action") == "stop":
+            target, payload = self._callback + "/stop", {}
+        else:
+            target = self._callback + "/run"
+            payload = {"name": item.get("macro"), "delay": 0, "hotkey": True}
+        body = json.dumps(payload).encode()
         request = urllib.request.Request(
-            self._callback, data=body, method="POST",
+            target, data=body, method="POST",
             headers={"Content-Type": "application/json"})
         try:
             urllib.request.urlopen(request, timeout=10).read()
@@ -501,7 +507,8 @@ class Hotkeys:
                 if message.message == WM_HOTKEY:
                     item = self._bound.get(int(message.wParam))
                     if item:
-                        print(f"  hotkey {item.get('combo')} -> {item.get('macro')}")
+                        print(f"  hotkey {item.get('combo')} -> "
+                              f"{item.get('action') or item.get('macro')}")
                         threading.Thread(target=self._fire, args=(item,),
                                          daemon=True).start()
             time.sleep(0.03)
@@ -652,7 +659,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path.startswith("/hotkeys"):
             port = int(data.get("port") or 8080)
-            callback = f"http://{self.client_address[0]}:{port}/api/run"
+            callback = f"http://{self.client_address[0]}:{port}/api"
             HOTKEYS.configure(data.get("hotkeys") or [], callback)
             time.sleep(0.2)  # let the worker apply them before reporting back
             return self._send({"ok": HOTKEYS.last_error is None,

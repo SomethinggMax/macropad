@@ -199,15 +199,22 @@ def parse(source):
                 raise MacroError(f"line {lineno}: 'waitfor' needs 'window' or 'pixel'")
             kind = parts[0].lower()
             rest_parts = parts[1:]
+
+            # optional trailing: else <label>, taken before the timeout
+            on_timeout = None
+            if len(rest_parts) >= 2 and rest_parts[-2].lower() == "else":
+                on_timeout = rest_parts[-1]
+                rest_parts = rest_parts[:-2]
+
             timeout = "10000"
             if len(rest_parts) > (3 if kind == "pixel" else 1) and \
                     rest_parts[-1].isdigit():
                 timeout = rest_parts.pop()
+
             if kind == "window":
                 if not rest_parts:
                     raise MacroError(f"line {lineno}: 'waitfor window' needs a title")
-                instrs.append(Instruction(
-                    "waitfor", ["window", " ".join(rest_parts), timeout], lineno))
+                spec, tolerant = " ".join(rest_parts), False
             elif kind == "pixel":
                 tolerant = len(rest_parts) == 4 and rest_parts[2].lower() == "near"
                 if tolerant:
@@ -220,11 +227,12 @@ def parse(source):
                     raise MacroError(
                         f"line {lineno}: {rest_parts[2]!r} is not a colour "
                         f"like #feef00")
-                instrs.append(Instruction(
-                    "waitfor", ["pixel", rest_parts, timeout, tolerant], lineno))
+                spec = rest_parts
             else:
                 raise MacroError(
                     f"line {lineno}: waitfor {kind!r} - use 'window' or 'pixel'")
+            instrs.append(Instruction(
+                "waitfor", [kind, spec, timeout, tolerant, on_timeout], lineno))
         elif op == "jumpif":
             parts = rest.split()
             if len(parts) < 4:
@@ -315,6 +323,9 @@ def parse(source):
     for instr in instrs:
         if instr.op == "goto" and instr.args[0] not in labels:
             raise MacroError(f"line {instr.line}: goto unknown label {instr.args[0]!r}")
+        if instr.op == "waitfor" and instr.args[4] and instr.args[4] not in labels:
+            raise MacroError(
+                f"line {instr.line}: waitfor else unknown label {instr.args[4]!r}")
         if instr.op == "jumpif" and instr.args[3] not in labels:
             raise MacroError(
                 f"line {instr.line}: jumpif unknown label {instr.args[3]!r}")
@@ -642,6 +653,7 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
     if op == "waitfor":
         kind, spec, timeout_raw = args[0], args[1], args[2]
         tolerant = args[3] if len(args) > 3 else False
+        on_timeout = args[4] if len(args) > 4 else None
         limit = as_number(timeout_raw, variables, instr.line, "timeout") / 1000
         if kind == "window":
             wanted = expand(spec, variables, instr.line).lower()
@@ -671,9 +683,13 @@ def _step(instr, pc, kb, labels, counters, log, dry_run, stop=None,
                 log.append(f"waitfor {describe} -> ready")
                 return pc + 1
             if time.monotonic() > deadline:
+                if on_timeout:
+                    log.append(f"waitfor {describe} -> timed out, jumping to "
+                               f"{on_timeout}")
+                    return labels[on_timeout]
                 raise MacroError(
                     f"line {instr.line}: timed out after {limit:g}s waiting for "
-                    f"{describe}")
+                    f"{describe} (add 'else <label>' to handle this in the macro)")
             if stop is not None and stop.wait(0.2):
                 raise MacroStopped("stopped while waiting", log)
             elif stop is None:

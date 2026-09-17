@@ -17,7 +17,7 @@ import urllib.request
 
 PORT = 8765
 TIMEOUT = 4.0
-WANT_VERSION = 6
+WANT_VERSION = 7
 # Remembered across restarts: the host is normally learned from the browser, so
 # without this every service restart would break agent features until someone
 # reloaded the IDE.
