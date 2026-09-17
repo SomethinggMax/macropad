@@ -672,16 +672,17 @@ function acContext() {
 function acSuggest(ctx) {
   const q = ctx.partial.toLowerCase();
   if (ctx.kind === 'window') {
+    // One row per window, labelled so windows sharing a name are still
+    // distinguishable, and inserting a target that can only match that one.
     return winCache
-      .filter(w => !q || (w.title + ' ' + w.exe).toLowerCase().includes(q))
+      .filter(w => !q ||
+        (w.title + ' ' + w.exe + ' ' + (w.class || '')).toLowerCase().includes(q))
       .slice(0, 8)
-      .flatMap(w => {
-        const rows = [{ label: w.title, note: w.exe, insert: w.title }];
-        if (w.class) rows.push({ label: 'class:' + w.class,
-                                 note: w.exe + ' (exact window)',
-                                 insert: 'class:' + w.class });
-        return rows;
-      });
+      .map(w => ({
+        label: w.title + (w.rect ? `  ${w.rect.width}x${w.rect.height}` : ''),
+        note: w.exe + (w.class ? ' · ' + w.class : ''),
+        insert: anchorTarget(w),
+      }));
   }
   const out = [];
   for (const g of keyCache) for (const k of g.keys) {
