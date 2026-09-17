@@ -65,6 +65,7 @@
   .c-kw  { color: #c084fc; font-weight: 600; }
   .c-var { color: #f0abfc; }
   .c-win { color: #5eead4; }
+  .c-hex { color: #67e8f9; }
   .ac { position: absolute; z-index: 5; background: #1b2028; border: 1px solid #39414f;
         border-radius: 6px; box-shadow: 0 8px 24px #0009; max-height: 210px;
         overflow: auto; min-width: 260px; font-size: 12.5px;
@@ -308,6 +309,9 @@ function vars(escaped) {
   return escaped.replace(/\$(\$|[A-Za-z_][A-Za-z0-9_]*)/g,
     (m, n) => n === '$' ? m : `<span class="c-var">${m}</span>`);
 }
+const OPERATOR = /^([<>=!]+|contains|near)$/i;
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
 function num(s) {
   // single pass: a second replace would corrupt the class names written by the first
   return esc(s).replace(/(\d+)|(-)/g, (m, d) => d
@@ -341,10 +345,15 @@ function hlLine(raw) {
     body2 = num(rest);
   } else if (lc === 'jumpif') {
     const q = rest.split(/([ \t]+)/);
-    body2 = q.map((x, i) => i === 0 ? `<span class="c-set">${esc(x)}</span>`
-      : i === q.length - 1 ? `<span class="c-lbl">${esc(x)}</span>`
-      : (/^[ \t]+$/.test(x) ? x
-         : (/^[<>=!]+$|^contains$/.test(x) ? `<span class="c-op">${esc(x)}</span>` : num(x)))).join('');
+    body2 = q.map((x, i) => {
+      if (/^[ \t]+$/.test(x)) return x;
+      if (i === 0) return `<span class="c-set">${esc(x)}</span>`;
+      if (i === q.length - 1) return `<span class="c-lbl">${esc(x)}</span>`;
+      if (OPERATOR.test(x)) return `<span class="c-op">${esc(x)}</span>`;
+      if (HEX.test(x)) return `<span class="c-hex">${esc(x)}</span>`;
+      if (/^-?\d+$/.test(x)) return num(x);
+      return `<span class="c-str">${esc(x)}</span>`;  // comparing against text
+    }).join('');
   } else if (lc === 'moveto' || lc === 'move' || lc === 'scroll' || lc === 'screen') {
     body2 = num(rest);
   } else if (lc === 'click' || lc === 'mousedown' || lc === 'mouseup') {
@@ -363,8 +372,9 @@ function hlLine(raw) {
     const q = rest.split(/([ \t]+)/);
     body2 = q.map((x, i) => i === 0 ? `<span class="c-kw">${esc(x)}</span>`
       : (/^[ \t]+$/.test(x) ? x
-         : (/^#[0-9a-fA-F]{6}$/.test(x) ? `<span class="c-key">${esc(x)}</span>`
-            : (/^\d+$/.test(x) ? num(x) : `<span class="c-win">${esc(x)}</span>`)))).join('');
+         : (HEX.test(x) ? `<span class="c-hex">${esc(x)}</span>`
+            : (OPERATOR.test(x) ? `<span class="c-op">${esc(x)}</span>`
+               : (/^\d+$/.test(x) ? num(x) : `<span class="c-win">${esc(x)}</span>`))))).join('');
   } else if (lc === 'limit') {
     body2 = /^(none|off|unlimited)$/i.test(rest)
       ? `<span class="c-kw">${esc(rest)}</span>` : num(rest);
