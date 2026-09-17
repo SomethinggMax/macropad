@@ -17,7 +17,7 @@ import urllib.request
 
 PORT = 8765
 TIMEOUT = 4.0
-WANT_VERSION = 5
+WANT_VERSION = 6
 # Remembered across restarts: the host is normally learned from the browser, so
 # without this every service restart would break agent features until someone
 # reloaded the IDE.
@@ -179,6 +179,11 @@ def window(target):
     if not result.get("ok") or not result.get("window"):
         raise AgentError(result.get("error") or f"no window matching {target!r}")
     return result["window"]
+
+
+def set_hotkeys(hotkeys, port=8080):
+    """Ask the agent to register global hotkeys that call this Pi back."""
+    return _call("/hotkeys", {"hotkeys": list(hotkeys), "port": port}, timeout=5.0)
 
 
 def region(x, y, w=32, h=32):

@@ -124,7 +124,8 @@ python agent/windows-agent.py
 ```
 
 It provides window listing and focus, the clipboard, pixel colours, cursor
-position, and the virtual desktop geometry. Allow it through the Windows
+position, the virtual desktop geometry, and global hotkeys that start a macro
+without leaving whatever you are doing (press again to stop it). Allow it through the Windows
 firewall on **private networks** or the Pi cannot reach it.
 
 The Pi discovers the PC's address from the browser connecting to the IDE, so

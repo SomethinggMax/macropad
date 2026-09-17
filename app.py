@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Web UI for writing, storing and firing macros."""
 
+import json
 import re
 import threading
 import time
@@ -16,6 +17,7 @@ from keycodes import catalogue
 MACRO_DIR = Path(__file__).resolve().parent / "macros"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
 SUFFIX = ".macro"
+HOTKEY_FILE = Path(__file__).resolve().parent / "hotkeys.json"
 
 app = Flask(__name__)
 run_lock = threading.Lock()
@@ -43,7 +45,22 @@ def index():
 def status():
     agent_client.set_host(request.remote_addr)
     state = host_state()
-    found = agent_client.version() if agent_client.get_host() else 0
+    found = 0
+    if agent_client.get_host():
+        try:
+            info = agent_client.ping()
+            found = int(info.get("version") or 0)
+            wanted = load_hotkeys()
+            live = info.get("hotkeys")
+            # self-healing: the agent forgets its hotkeys when restarted
+            if wanted and live is not None and live != [
+                    {"combo": h["combo"], "macro": h["macro"]} for h in wanted]:
+                try:
+                    push_hotkeys(wanted)
+                except agent_client.AgentError:
+                    pass
+        except agent_client.AgentError:
+            found = 0
     return jsonify(state=state, connected=(state == "configured"),
                    agent_host=agent_client.get_host(),
                    agent_version=found, agent_wants=agent_client.WANT_VERSION,
@@ -111,6 +128,53 @@ def region():
                        size=size, rgb=block["rgb"])
     except agent_client.AgentError as exc:
         return jsonify(ok=False, error=str(exc)), 503
+
+
+def load_hotkeys():
+    try:
+        return json.loads(HOTKEY_FILE.read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def push_hotkeys(hotkeys=None):
+    """Send the hotkey list to the agent, which registers them on the PC."""
+    wanted = load_hotkeys() if hotkeys is None else hotkeys
+    return agent_client.set_hotkeys(wanted)
+
+
+@app.route("/api/hotkeys", methods=["GET", "PUT"])
+def hotkeys():
+    if request.method == "GET":
+        live, problem = [], None
+        try:
+            live = agent_client.ping().get("hotkeys") or []
+        except agent_client.AgentError as exc:
+            problem = str(exc)
+        return jsonify(ok=True, hotkeys=load_hotkeys(), registered=live,
+                       error=problem)
+
+    wanted = (request.json or {}).get("hotkeys") or []
+    cleaned = []
+    for item in wanted:
+        combo = str(item.get("combo", "")).strip()
+        macro = str(item.get("macro", "")).strip()
+        if not combo or not macro:
+            return jsonify(ok=False, error="each hotkey needs a combo and a macro"), 400
+        try:
+            macro_path(macro)
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        cleaned.append({"combo": combo, "macro": macro})
+
+    HOTKEY_FILE.write_text(json.dumps(cleaned, indent=2))
+    try:
+        result = push_hotkeys(cleaned)
+    except agent_client.AgentError as exc:
+        return jsonify(ok=False, error=f"saved, but the agent refused: {exc}"), 503
+    return jsonify(ok=result.get("ok", False), hotkeys=cleaned,
+                   registered=result.get("registered") or [],
+                   error=result.get("error"))
 
 
 @app.route("/api/keys")
@@ -194,7 +258,21 @@ def run_macro():
     source = data.get("source", "")
     delay = min(max(float(data.get("delay", 3)), 0), 300)
 
+    if data.get("name"):
+        try:
+            path = macro_path(str(data["name"]))
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+        if not path.exists():
+            return jsonify(ok=False, error=f"no macro named {data['name']!r}"), 404
+        source = path.read_text()
+
     if not run_lock.acquire(blocking=False):
+        if data.get("hotkey"):
+            # pressing the hotkey again is the natural way to stop a macro that
+            # runs until stopped, since the point is not touching the browser
+            stop_event.set()
+            return jsonify(ok=True, stopped=True, action="stopped by hotkey")
         return jsonify(ok=False, error="a macro is already running"), 409
     try:
         state = host_state()

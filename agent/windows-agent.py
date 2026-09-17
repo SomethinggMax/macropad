@@ -11,13 +11,17 @@ Then in the macro IDE on the Pi, pick a target window or use:  focus <title>
 import base64
 import ctypes
 import json
+import queue
+import threading
 import time
+import urllib.error
+import urllib.request
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PORT = 8765
-VERSION = 5  # bumped whenever endpoints change, so the Pi can warn if stale
+VERSION = 6  # bumped whenever endpoints change, so the Pi can warn if stale
 DWMWA_CLOAKED = 14
 SW_RESTORE = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -28,6 +32,22 @@ SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 MONITORINFOF_PRIMARY = 1
 CF_UNICODETEXT = 13
 SRCCOPY = 0x00CC0020
+WM_HOTKEY = 0x0312
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT = 1, 2, 4, 8, 0x4000
+HOTKEY_MODS = {"alt": MOD_ALT, "ctrl": MOD_CONTROL, "control": MOD_CONTROL,
+               "shift": MOD_SHIFT, "win": MOD_WIN, "gui": MOD_WIN,
+               "cmd": MOD_WIN, "meta": MOD_WIN}
+VIRTUAL_KEYS = {
+    "space": 0x20, "enter": 0x0D, "return": 0x0D, "tab": 0x09, "esc": 0x1B,
+    "escape": 0x1B, "backspace": 0x08, "insert": 0x2D, "delete": 0x2E,
+    "del": 0x2E, "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+    "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
+    "printscreen": 0x2C, "scrolllock": 0x91, "pause": 0x13, "numlock": 0x90,
+}
+VIRTUAL_KEYS.update({f"f{n}": 0x70 + n - 1 for n in range(1, 25)})
+VIRTUAL_KEYS.update({chr(c): c for c in range(0x41, 0x5B)})          # A-Z
+VIRTUAL_KEYS.update({chr(c).lower(): c for c in range(0x41, 0x5B)})  # a-z
+VIRTUAL_KEYS.update({str(n): 0x30 + n for n in range(10)})           # 0-9
 DIB_RGB_COLORS = 0
 GMEM_MOVEABLE = 0x0002
 
@@ -86,6 +106,13 @@ kernel32.QueryFullProcessImageNameW.argtypes = [
     ctypes.POINTER(wintypes.DWORD)]
 
 ENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+
+class MSG(ctypes.Structure):
+    _fields_ = [("hwnd", wintypes.HWND), ("message", wintypes.UINT),
+                ("wParam", wintypes.WPARAM), ("lParam", wintypes.LPARAM),
+                ("time", wintypes.DWORD), ("pt_x", ctypes.c_long),
+                ("pt_y", ctypes.c_long)]
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -389,6 +416,100 @@ def capture_region(x, y, width, height):
     return base64.b64encode(bytes(rgb)).decode()
 
 
+def parse_hotkey(combo):
+    """'ctrl+f11' -> (modifier flags, virtual key code)."""
+    parts = [p.strip().lower() for p in str(combo).split("+") if p.strip()]
+    if not parts:
+        raise ValueError("empty hotkey")
+    flags = 0
+    for part in parts[:-1]:
+        if part not in HOTKEY_MODS:
+            raise ValueError(f"unknown modifier {part!r}")
+        flags |= HOTKEY_MODS[part]
+    key = VIRTUAL_KEYS.get(parts[-1])
+    if key is None:
+        raise ValueError(f"cannot use {parts[-1]!r} as a hotkey")
+    # NOREPEAT so holding the combo fires once, not continuously
+    return flags | MOD_NOREPEAT, key
+
+
+class Hotkeys:
+    """Registers global hotkeys and calls the Pi back when one is pressed.
+
+    RegisterHotKey binds to the calling thread's message queue, so everything
+    happens on one worker thread: configuration arrives through a queue and
+    presses are read with PeekMessage.
+    """
+
+    def __init__(self):
+        self.requests = queue.Queue()
+        self.registered = []
+        self.last_error = None
+        self._bound = {}
+        self._callback = None
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def configure(self, hotkeys, callback):
+        self.requests.put((list(hotkeys), callback))
+
+    def _unbind_all(self):
+        for hotkey_id in list(self._bound):
+            user32.UnregisterHotKey(None, hotkey_id)
+            del self._bound[hotkey_id]
+
+    def _bind(self, hotkeys, callback):
+        self._unbind_all()
+        self._callback = callback
+        self.registered, problems = [], []
+        for index, item in enumerate(hotkeys, start=1):
+            combo = item.get("combo", "")
+            try:
+                flags, key = parse_hotkey(combo)
+            except ValueError as exc:
+                problems.append(f"{combo}: {exc}")
+                continue
+            if not user32.RegisterHotKey(None, index, flags, key):
+                problems.append(f"{combo}: already taken by another program")
+                continue
+            self._bound[index] = item
+            self.registered.append({"combo": combo, "macro": item.get("macro")})
+        self.last_error = "; ".join(problems) or None
+
+    def _fire(self, item):
+        if not self._callback:
+            return
+        body = json.dumps({"name": item.get("macro"), "delay": 0,
+                           "hotkey": True}).encode()
+        request = urllib.request.Request(
+            self._callback, data=body, method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(request, timeout=10).read()
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"  hotkey callback failed: {exc}")
+
+    def _run(self):
+        message = MSG()
+        while True:
+            try:
+                while True:
+                    hotkeys, callback = self.requests.get_nowait()
+                    self._bind(hotkeys, callback)
+            except queue.Empty:
+                pass
+            while user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+                if message.message == WM_HOTKEY:
+                    item = self._bound.get(int(message.wParam))
+                    if item:
+                        print(f"  hotkey {item.get('combo')} -> {item.get('macro')}")
+                        threading.Thread(target=self._fire, args=(item,),
+                                         daemon=True).start()
+            time.sleep(0.03)
+
+
+HOTKEYS = Hotkeys()
+
+
 def cursor_position():
     point = wintypes.POINT()
     user32.GetCursorPos(ctypes.byref(point))
@@ -517,7 +638,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/windows"):
             self._send({"ok": True, "windows": list_windows()})
         elif self.path.startswith("/ping"):
-            self._send({"ok": True, "agent": "windows", "version": VERSION})
+            self._send({"ok": True, "agent": "windows", "version": VERSION,
+                        "hotkeys": HOTKEYS.registered})
         else:
             self._send({"ok": False, "error": "not found"}, 404)
 
@@ -528,6 +650,14 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self._send({"ok": False, "error": "bad json"}, 400)
 
+        if self.path.startswith("/hotkeys"):
+            port = int(data.get("port") or 8080)
+            callback = f"http://{self.client_address[0]}:{port}/api/run"
+            HOTKEYS.configure(data.get("hotkeys") or [], callback)
+            time.sleep(0.2)  # let the worker apply them before reporting back
+            return self._send({"ok": HOTKEYS.last_error is None,
+                               "registered": HOTKEYS.registered,
+                               "error": HOTKEYS.last_error})
         if self.path.startswith("/clipboard"):
             return self._send({"ok": set_clipboard(str(data.get("text", "")))})
         if self.path.startswith("/window?") or self.path == "/window":
@@ -609,6 +739,6 @@ if __name__ == "__main__":
         print(f"  {m['width']}x{m['height']} at ({m['x']},{m['y']})"
               f"{' [primary]' if m['primary'] else ''}")
     print(f"Macropad agent listening on port {PORT}  "
-          f"(windows, focus, screen, cursor, clipboard, pixel, region)")
+          f"(windows, focus, screen, cursor, clipboard, pixel, region, hotkeys)")
     print(f"Found {len(list_windows())} windows. Leave this running.\n")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
